@@ -1,19 +1,14 @@
-# vaqum Homebrew tap
+# vaqum
 
-Homebrew tap for [vaqum](https://github.com/marcdomain/vaqum) — losslessly
-compress/decompress files, diff them, find duplicates, and securely shred
-them, from the command line.
+Losslessly compress/decompress files, diff them (with an HTML report), find
+duplicates, and securely shred them — from the command line.
 
 ![vaqum demo](https://raw.githubusercontent.com/marcdomain/vaqum/main/demo.gif)
 
-## Install
-
-```sh
-brew tap marcdomain/vaqum
-brew install vaqum
-```
-
-Or in one line: `brew install marcdomain/vaqum/vaqum`.
+This package is a thin wrapper: `npm install` fetches the real native
+`vaqum` binary for your platform from the matching [GitHub
+Release](https://github.com/marcdomain/vaqum/releases), verifies its
+checksum, and installs it as the `vaqum` command.
 
 ## Usage
 
