@@ -1,0 +1,29 @@
+{
+  "name": "vaqum",
+  "version": "0.1.0",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "description": "Losslessly compress, decompress, and securely shred files — thin wrapper around the native vaqum binary.",
+  "main": "bin/vaqum.js",
+  "bin": {
+    "vaqum": "bin/vaqum.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "keywords": ["compression", "zstd", "lzma", "shred", "cli", "diff", "dedupe"],
+  "author": "Marcus Chukwuoma <marcus2cu@gmail.com> (https://github.com/marcdomain)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcdomain/vaqum.git"
+  },
+  "homepage": "https://github.com/marcdomain/vaqum#readme",
+  "os": ["darwin", "linux", "win32"],
+  "cpu": ["x64", "arm64"],
+  "engines": {
+    "node": ">=16"
+  }
+}

@@ -1,0 +1,223 @@
+name: Release
+
+# Publishes vaqum everywhere the project brief commits to: GitHub Releases
+# (source of truth for all binaries), npm, and — when the tap credential is
+# configured — the Homebrew tap. Mirrors the verify-branch -> test ->
+# publish shape used by this author's other CLI tools' release workflows,
+# extended with the cross-compile + multi-registry steps a Rust CLI needs.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main branch
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor ${{ github.sha }} origin/main; then
+            echo "Error: tags must only be pushed on commits that exist on the main branch."
+            exit 1
+          fi
+
+      - name: Verify Cargo.toml version matches the tag
+        run: |
+          PKG_VERSION="v$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          GIT_TAG="${{ github.ref_name }}"
+          if [ "$PKG_VERSION" != "$GIT_TAG" ]; then
+            echo "Version mismatch: Cargo.toml=$PKG_VERSION, tag=$GIT_TAG"
+            exit 1
+          fi
+
+  test:
+    needs: verify-branch
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --verbose
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256() {
+            if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi
+          }
+
+          version="${GITHUB_REF_NAME#v}"
+          target="${{ matrix.target }}"
+          ext=""
+          case "$target" in *windows*) ext=".exe" ;; esac
+          bin="target/${target}/release/vaqum${ext}"
+
+          # Bare binary + checksum: what the npm postinstall fetches directly.
+          bare="vaqum-${version}-${target}${ext}"
+          cp "$bin" "$bare"
+          chmod +x "$bare" || true
+          sha256 "$bare" > "${bare}.sha256"
+
+          # Tarball (binary + docs) + checksum: for Homebrew and install.sh
+          # (works on Windows too — tar has shipped with Windows since 10
+          # 1803, and it's on PATH in GitHub's windows-latest image).
+          stage="$(mktemp -d)/vaqum-${version}-${target}"
+          mkdir -p "$stage"
+          cp "$bin" README.md LICENSE "$stage"/
+          archive="vaqum-${version}-${target}.tar.gz"
+          tar -czf "$archive" -C "$stage" .
+          sha256 "$archive" > "${archive}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vaqum-${{ matrix.target }}
+          path: |
+            vaqum-*
+            !vaqum-*.tar.gz.tmp
+          if-no-files-found: error
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  npm-publish:
+    needs: github-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: npm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify npm package version matches the tag
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          GIT_TAG="${{ github.ref_name }}"
+          if [ "$PKG_VERSION" != "$GIT_TAG" ]; then
+            echo "Version mismatch: npm/package.json=$PKG_VERSION, tag=$GIT_TAG"
+            exit 1
+          fi
+
+      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  check-homebrew-secret:
+    needs: github-release
+    runs-on: ubuntu-latest
+    outputs:
+      has-token: ${{ steps.check.outputs.has-token }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ secrets.HOMEBREW_TAP_TOKEN }}" ]; then
+            echo "has-token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-token=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  homebrew-tap:
+    needs: [github-release, check-homebrew-secret]
+    runs-on: ubuntu-latest
+    # Best-effort: only runs once the tap repo + PAT are set up. See
+    # packaging/homebrew/README.md for the one-time setup this depends on.
+    if: needs.check-homebrew-secret.outputs.has-token == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Render formula
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          sha_arm="$(cut -d' ' -f1 "dist/vaqum-${version}-aarch64-apple-darwin.tar.gz.sha256")"
+          sha_intel="$(cut -d' ' -f1 "dist/vaqum-${version}-x86_64-apple-darwin.tar.gz.sha256")"
+          sha_linux="$(cut -d' ' -f1 "dist/vaqum-${version}-x86_64-unknown-linux-gnu.tar.gz.sha256")"
+          ./packaging/homebrew/render.sh "$version" "$sha_intel" "$sha_arm" "$sha_linux" > vaqum.rb
+
+      - name: Push to homebrew-vaqum tap
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${{ secrets.HOMEBREW_TAP_TOKEN }}@github.com/marcdomain/homebrew-vaqum.git" tap
+          mkdir -p tap/Formula
+          cp vaqum.rb tap/Formula/vaqum.rb
+          cd tap
+          git config user.name "vaqum-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Formula/vaqum.rb
+          git diff --cached --quiet && exit 0
+          git commit -m "vaqum ${GITHUB_REF_NAME}"
+          git push

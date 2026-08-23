@@ -1,0 +1,619 @@
+//! `vaqum diff` — compare two files, directories, or `.vaqum` archives (any
+//! mix of the three; `.vaqum` inputs are transparently decompressed first).
+//!
+//! Exit-code contract mirrors the classic Unix `diff`: 0 identical, 1
+//! differences found, 2 trouble. See `main.rs` for where that's enforced.
+
+use std::fs::{self, File};
+use std::io::{IsTerminal, Read};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use similar::{ChangeTag, TextDiff};
+use tempfile::TempDir;
+
+use crate::cli::DiffArgs;
+use crate::codec;
+use crate::dedup;
+use crate::format::{EntryType, Header};
+use crate::util::{TreeFile, hash_bytes, hash_tree, human_bytes};
+
+pub fn run(args: DiffArgs) -> Result<bool> {
+    let a = resolve(&args.a)?;
+    let b = resolve(&args.b)?;
+
+    let (identical, html_body) = match (&a, &b) {
+        (
+            Resolved::File {
+                name: na,
+                bytes: ba,
+            },
+            Resolved::File {
+                name: nb,
+                bytes: bb,
+            },
+        ) => {
+            let identical = ba == bb;
+            print_file_diff(na, ba, nb, bb, identical);
+            let body = html_file_diff(na, ba, nb, bb, identical);
+            (identical, body)
+        }
+        (
+            Resolved::Dir {
+                name: na, root: ra, ..
+            },
+            Resolved::Dir {
+                name: nb, root: rb, ..
+            },
+        ) => {
+            let threads = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
+            let tree = compute_tree_diff(ra, rb, threads)?;
+            print_tree_diff(na, nb, &tree, args.verbose);
+            let body = html_tree_diff(na, nb, &tree);
+            (tree.is_identical(), body)
+        }
+        _ => bail!(
+            "cannot compare a file against a directory: '{}' is a {}, '{}' is a {}",
+            args.a.display(),
+            a.kind_name(),
+            args.b.display(),
+            b.kind_name(),
+        ),
+    };
+
+    if args.html.is_some() || args.open {
+        let html_path = match &args.html {
+            Some(p) => p.clone(),
+            None => {
+                let tmp = tempfile::Builder::new()
+                    .prefix("vaqum-diff-")
+                    .suffix(".html")
+                    .tempfile()
+                    .context("failed to create a temp file for --open")?;
+                let (_, path) = tmp.keep().context("failed to persist temp html file")?;
+                path
+            }
+        };
+        let page = html_page(&args.a, &args.b, &html_body);
+        fs::write(&html_path, page)
+            .with_context(|| format!("failed to write {}", html_path.display()))?;
+        println!("\nHTML diff report: {}", html_path.display());
+        if args.open {
+            open_in_browser(&html_path);
+        }
+    }
+
+    Ok(identical)
+}
+
+// ---------------------------------------------------------------------
+// Resolving inputs (plain file/dir, or a .vaqum archive of either)
+// ---------------------------------------------------------------------
+
+enum Resolved {
+    File {
+        name: String,
+        bytes: Vec<u8>,
+    },
+    Dir {
+        name: String,
+        root: PathBuf,
+        // Kept alive for the duration of the diff when this side came from
+        // a .vaqum archive; `None` for a real on-disk directory.
+        _temp: Option<TempDir>,
+    },
+}
+
+impl Resolved {
+    fn kind_name(&self) -> &'static str {
+        match self {
+            Resolved::File { .. } => "file",
+            Resolved::Dir { .. } => "directory",
+        }
+    }
+}
+
+fn resolve(path: &Path) -> Result<Resolved> {
+    if !path.exists() {
+        bail!("'{}' does not exist", path.display());
+    }
+    if path.is_file() && is_vaqum_file(path)? {
+        return resolve_vaqum(path);
+    }
+    if path.is_dir() {
+        let name = display_name(path);
+        return Ok(Resolved::Dir {
+            name,
+            root: path.to_path_buf(),
+            _temp: None,
+        });
+    }
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(Resolved::File {
+        name: display_name(path),
+        bytes,
+    })
+}
+
+fn is_vaqum_file(path: &Path) -> Result<bool> {
+    let mut f = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut magic = [0u8; 4];
+    match f.read_exact(&mut magic) {
+        Ok(()) => Ok(&magic == crate::format::MAGIC),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn resolve_vaqum(path: &Path) -> Result<Resolved> {
+    let mut in_file =
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let header = Header::read(&mut in_file)?;
+    let decoder = codec::Decoder::new(in_file, header.algorithm)?;
+
+    match header.entry_type {
+        EntryType::File => {
+            let mut bytes = Vec::new();
+            let mut decoder = decoder;
+            decoder
+                .read_to_end(&mut bytes)
+                .with_context(|| format!("failed to decompress {}", path.display()))?;
+            Ok(Resolved::File {
+                name: header.name,
+                bytes,
+            })
+        }
+        EntryType::Archive => {
+            let temp = TempDir::new().context("failed to create a temp directory")?;
+            let staging_dir = temp.path().join(".vaqum-diff-staging");
+            let target_dir = temp.path().join(&header.name);
+            dedup::unpack_tar(decoder, header.dedup, &staging_dir, &target_dir)?;
+            Ok(Resolved::Dir {
+                name: header.name,
+                root: target_dir,
+                _temp: Some(temp),
+            })
+        }
+    }
+}
+
+fn display_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+// ---------------------------------------------------------------------
+// Directory tree diffing
+// ---------------------------------------------------------------------
+
+struct TreeFileSummary {
+    rel_path: String,
+    size: u64,
+}
+
+enum ModifiedContent {
+    Text { text_a: String, text_b: String },
+    Binary { size_a: u64, size_b: u64 },
+}
+
+struct ModifiedFile {
+    rel_path: String,
+    content: ModifiedContent,
+}
+
+struct TreeDiff {
+    added: Vec<TreeFileSummary>,
+    removed: Vec<TreeFileSummary>,
+    modified: Vec<ModifiedFile>,
+    unchanged_count: usize,
+}
+
+impl TreeDiff {
+    fn is_identical(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.modified.is_empty()
+    }
+}
+
+fn compute_tree_diff(root_a: &Path, root_b: &Path, threads: usize) -> Result<TreeDiff> {
+    let (_, files_a) = hash_tree(root_a, threads)?;
+    let (_, files_b) = hash_tree(root_b, threads)?;
+
+    let map_a: std::collections::BTreeMap<&str, &TreeFile> =
+        files_a.iter().map(|f| (f.rel_path.as_str(), f)).collect();
+    let map_b: std::collections::BTreeMap<&str, &TreeFile> =
+        files_b.iter().map(|f| (f.rel_path.as_str(), f)).collect();
+
+    let all_paths: std::collections::BTreeSet<&str> =
+        map_a.keys().chain(map_b.keys()).copied().collect();
+
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut modified = Vec::new();
+    let mut unchanged_count = 0;
+
+    for rel_path in all_paths {
+        match (map_a.get(rel_path), map_b.get(rel_path)) {
+            (Some(fa), Some(fb)) if fa.hash == fb.hash => unchanged_count += 1,
+            (Some(fa), Some(fb)) => {
+                let content = read_modified_content(fa, fb)?;
+                modified.push(ModifiedFile {
+                    rel_path: rel_path.to_string(),
+                    content,
+                });
+            }
+            (Some(fa), None) => removed.push(TreeFileSummary {
+                rel_path: rel_path.to_string(),
+                size: fa.size,
+            }),
+            (None, Some(fb)) => added.push(TreeFileSummary {
+                rel_path: rel_path.to_string(),
+                size: fb.size,
+            }),
+            (None, None) => unreachable!("path came from one of the two maps"),
+        }
+    }
+
+    Ok(TreeDiff {
+        added,
+        removed,
+        modified,
+        unchanged_count,
+    })
+}
+
+fn read_modified_content(fa: &TreeFile, fb: &TreeFile) -> Result<ModifiedContent> {
+    let bytes_a = fs::read(&fa.abs_path)
+        .with_context(|| format!("failed to read {}", fa.abs_path.display()))?;
+    let bytes_b = fs::read(&fb.abs_path)
+        .with_context(|| format!("failed to read {}", fb.abs_path.display()))?;
+    match (as_text(&bytes_a), as_text(&bytes_b)) {
+        (Some(ta), Some(tb)) => Ok(ModifiedContent::Text {
+            text_a: ta.to_string(),
+            text_b: tb.to_string(),
+        }),
+        _ => Ok(ModifiedContent::Binary {
+            size_a: fa.size,
+            size_b: fb.size,
+        }),
+    }
+}
+
+/// Heuristic: valid UTF-8 with no NUL byte in the first 8KB looks like text.
+fn as_text(bytes: &[u8]) -> Option<&str> {
+    let probe_len = bytes.len().min(8000);
+    if bytes[..probe_len].contains(&0) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()
+}
+
+// ---------------------------------------------------------------------
+// Terminal rendering
+// ---------------------------------------------------------------------
+
+fn print_file_diff(name_a: &str, bytes_a: &[u8], name_b: &str, bytes_b: &[u8], identical: bool) {
+    if identical {
+        println!("'{name_a}' and '{name_b}' are identical");
+        return;
+    }
+    match (as_text(bytes_a), as_text(bytes_b)) {
+        (Some(ta), Some(tb)) => print_unified_diff(name_a, name_b, ta, tb),
+        _ => println!(
+            "Binary files '{name_a}' and '{name_b}' differ ({} vs {}; sha256 {}… vs {}…)",
+            human_bytes(bytes_a.len() as u64),
+            human_bytes(bytes_b.len() as u64),
+            &crate::util::hex_encode(&hash_bytes(bytes_a))[..12],
+            &crate::util::hex_encode(&hash_bytes(bytes_b))[..12],
+        ),
+    }
+}
+
+fn print_tree_diff(name_a: &str, name_b: &str, diff: &TreeDiff, verbose: bool) {
+    if diff.is_identical() {
+        println!(
+            "'{name_a}' and '{name_b}' are identical ({} files)",
+            diff.unchanged_count
+        );
+        return;
+    }
+
+    println!("comparing '{name_a}' vs '{name_b}':");
+    println!(
+        "  {} unchanged, {} added, {} removed, {} modified",
+        diff.unchanged_count,
+        diff.added.len(),
+        diff.removed.len(),
+        diff.modified.len()
+    );
+    for f in &diff.removed {
+        println!("  - {}  ({})", f.rel_path, human_bytes(f.size));
+    }
+    for f in &diff.added {
+        println!("  + {}  ({})", f.rel_path, human_bytes(f.size));
+    }
+    for f in &diff.modified {
+        match &f.content {
+            ModifiedContent::Binary { size_a, size_b } => println!(
+                "  ~ {}  (binary, {} -> {})",
+                f.rel_path,
+                human_bytes(*size_a),
+                human_bytes(*size_b)
+            ),
+            ModifiedContent::Text { text_a, text_b } => {
+                println!("  ~ {}", f.rel_path);
+                if verbose {
+                    let name_a = format!("a/{}", f.rel_path);
+                    let name_b = format!("b/{}", f.rel_path);
+                    print_unified_diff(&name_a, &name_b, text_a, text_b);
+                }
+            }
+        }
+    }
+}
+
+fn print_unified_diff(name_a: &str, name_b: &str, text_a: &str, text_b: &str) {
+    let diff_text = TextDiff::from_lines(text_a, text_b)
+        .unified_diff()
+        .header(name_a, name_b)
+        .to_string();
+    let colorize = std::io::stdout().is_terminal();
+    for line in diff_text.lines() {
+        if !colorize {
+            println!("{line}");
+        } else if line.starts_with("@@") {
+            println!("\x1b[36m{line}\x1b[0m");
+        } else if (line.starts_with('+') && !line.starts_with("+++"))
+            || (line.starts_with('-') && !line.starts_with("---"))
+        {
+            let color = if line.starts_with('+') { "32" } else { "31" };
+            println!("\x1b[{color}m{line}\x1b[0m");
+        } else {
+            println!("{line}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// HTML rendering — a self-contained, offline diff report with no
+// JavaScript: `<details>`/`<summary>` give us collapsible sections for
+// free, and `prefers-color-scheme` keeps it readable in either theme.
+// ---------------------------------------------------------------------
+
+const STYLE: &str = r#"
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff; --fg: #1a1a1a; --muted: #6b7280; --border: #e5e7eb;
+  --add-bg: #e6ffed; --add-fg: #1a7f37; --del-bg: #ffeef0; --del-fg: #cf222e;
+  --hunk-bg: #f6f8fa; --card-bg: #f9fafb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #30363d;
+    --add-bg: #033a16; --add-fg: #3fb950; --del-bg: #490202; --del-fg: #f85149;
+    --hunk-bg: #161b22; --card-bg: #161b22;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); margin: 0; padding: 2rem;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+.summary {
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 0.75rem 1rem; margin-bottom: 1.5rem;
+}
+.identical { color: var(--add-fg); font-weight: 600; }
+.binary { color: var(--muted); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+details {
+  border: 1px solid var(--border); border-radius: 8px; margin-bottom: 1rem; overflow: hidden;
+}
+summary {
+  cursor: pointer; padding: 0.6rem 1rem; background: var(--card-bg); font-weight: 600;
+}
+ul.filelist { list-style: none; margin: 0; padding: 0.5rem 1rem 0.75rem; }
+ul.filelist li { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 2px 0; }
+.filelist-item { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 0.5rem 1rem; }
+.muted { color: var(--muted); }
+.diff { padding: 0.5rem 0; }
+.hunk-header { color: var(--muted); background: var(--hunk-bg); padding: 2px 1rem; font-family: ui-monospace, monospace; font-size: 12px; }
+.diff-line { white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 0 1rem; }
+.diff-line.add { background: var(--add-bg); color: var(--add-fg); }
+.diff-line.del { background: var(--del-bg); color: var(--del-fg); }
+.footer { color: var(--muted); font-size: 12px; margin-top: 2rem; }
+"#;
+
+fn html_page(a: &Path, b: &Path, body: &str) -> String {
+    let title = format!("vaqum diff: {} vs {}", display_name(a), display_name(b));
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>{STYLE}</style>
+</head>
+<body>
+<h1>{title}</h1>
+{body}
+<p class="footer">Generated by <code>vaqum diff</code></p>
+</body>
+</html>
+"#,
+        title = escape_html(&title),
+    )
+}
+
+fn html_file_diff(
+    name_a: &str,
+    bytes_a: &[u8],
+    name_b: &str,
+    bytes_b: &[u8],
+    identical: bool,
+) -> String {
+    let summary = format!(
+        "<div class=\"summary\"><code>{}</code> vs <code>{}</code></div>",
+        escape_html(name_a),
+        escape_html(name_b)
+    );
+    let content = if identical {
+        "<p class=\"identical\">✔ Files are identical.</p>".to_string()
+    } else {
+        match (as_text(bytes_a), as_text(bytes_b)) {
+            (Some(ta), Some(tb)) => html_hunks(ta, tb),
+            _ => format!(
+                "<p class=\"binary\">Binary files differ — {} vs {}.</p>",
+                human_bytes(bytes_a.len() as u64),
+                human_bytes(bytes_b.len() as u64)
+            ),
+        }
+    };
+    format!("{summary}\n{content}")
+}
+
+fn html_tree_diff(name_a: &str, name_b: &str, diff: &TreeDiff) -> String {
+    let mut out = format!(
+        "<div class=\"summary\"><code>{}</code> vs <code>{}</code> — {} unchanged, {} added, {} removed, {} modified</div>",
+        escape_html(name_a),
+        escape_html(name_b),
+        diff.unchanged_count,
+        diff.added.len(),
+        diff.removed.len(),
+        diff.modified.len()
+    );
+
+    if diff.is_identical() {
+        out.push_str("<p class=\"identical\">✔ Directory contents are identical.</p>");
+        return out;
+    }
+
+    if !diff.removed.is_empty() {
+        out.push_str(&format!(
+            "<details open><summary>Removed ({})</summary><ul class=\"filelist\">",
+            diff.removed.len()
+        ));
+        for f in &diff.removed {
+            out.push_str(&format!(
+                "<li>- {} <span class=\"muted\">({})</span></li>",
+                escape_html(&f.rel_path),
+                human_bytes(f.size)
+            ));
+        }
+        out.push_str("</ul></details>");
+    }
+
+    if !diff.added.is_empty() {
+        out.push_str(&format!(
+            "<details open><summary>Added ({})</summary><ul class=\"filelist\">",
+            diff.added.len()
+        ));
+        for f in &diff.added {
+            out.push_str(&format!(
+                "<li>+ {} <span class=\"muted\">({})</span></li>",
+                escape_html(&f.rel_path),
+                human_bytes(f.size)
+            ));
+        }
+        out.push_str("</ul></details>");
+    }
+
+    if !diff.modified.is_empty() {
+        out.push_str(&format!(
+            "<details open><summary>Modified ({})</summary>",
+            diff.modified.len()
+        ));
+        for f in &diff.modified {
+            match &f.content {
+                ModifiedContent::Text { text_a, text_b } => {
+                    out.push_str(&format!(
+                        "<details><summary>{}</summary>",
+                        escape_html(&f.rel_path)
+                    ));
+                    out.push_str(&html_hunks(text_a, text_b));
+                    out.push_str("</details>");
+                }
+                ModifiedContent::Binary { size_a, size_b } => {
+                    out.push_str(&format!(
+                        "<div class=\"filelist-item\">~ {} <span class=\"muted\">(binary, {} \u{2192} {})</span></div>",
+                        escape_html(&f.rel_path),
+                        human_bytes(*size_a),
+                        human_bytes(*size_b)
+                    ));
+                }
+            }
+        }
+        out.push_str("</details>");
+    }
+
+    out
+}
+
+fn html_hunks(text_a: &str, text_b: &str) -> String {
+    let diff = TextDiff::from_lines(text_a, text_b);
+    let unified = diff.unified_diff();
+    let mut out = String::from("<div class=\"diff\">");
+    let mut any = false;
+    for hunk in unified.iter_hunks() {
+        any = true;
+        out.push_str(&format!(
+            "<div class=\"hunk-header\">{}</div>",
+            escape_html(&hunk.header().to_string())
+        ));
+        for change in hunk.iter_changes() {
+            let (class, prefix) = match change.tag() {
+                ChangeTag::Insert => ("add", '+'),
+                ChangeTag::Delete => ("del", '-'),
+                ChangeTag::Equal => ("ctx", ' '),
+            };
+            let text = change.to_string_lossy();
+            out.push_str(&format!(
+                "<div class=\"diff-line {class}\">{prefix}{}</div>",
+                escape_html(text.trim_end_matches('\n'))
+            ));
+        }
+    }
+    if !any {
+        out.push_str(
+            "<p class=\"muted\">No line-level differences (whitespace/newline only?).</p>",
+        );
+    }
+    out.push_str("</div>");
+    out
+}
+
+fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn open_in_browser(path: &Path) {
+    let result = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(path).status()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(path)
+            .status()
+    } else {
+        std::process::Command::new("xdg-open").arg(path).status()
+    };
+    if let Err(err) = result {
+        eprintln!("warning: could not open browser automatically: {err}");
+    }
+}
