@@ -2,6 +2,12 @@
 
 Losslessly compress files faster and smaller than zip/gzip, decompress them, diff (displayed on editor or HTML report), search and find duplicates, and securely shred them — from the command line.
 
+## Install
+
+```bash
+npm i -g @marcdomain/vaqum
+```
+
 ![vaqum demo](https://raw.githubusercontent.com/marcdomain/vaqum/main/demo.gif)
 
 This package is a thin wrapper: `npm install` fetches the real native
