@@ -1,4 +1,6 @@
-use std::fs::{self, File};
+#[cfg(unix)]
+use std::fs;
+use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
