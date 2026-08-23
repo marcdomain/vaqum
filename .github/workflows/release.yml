@@ -1,15 +1,35 @@
 name: Release
 
-# Publishes vaqum everywhere the project brief commits to: GitHub Releases
-# (source of truth for all binaries), npm, and — when the tap credential is
-# configured — the Homebrew tap. Mirrors the verify-branch -> test ->
-# publish shape used by this author's other CLI tools' release workflows,
-# extended with the cross-compile + multi-registry steps a Rust CLI needs.
+# Push a vX.Y.Z tag to build + publish everything. Or run manually from the
+# Actions tab to pick platforms and publish targets individually.
 
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build/publish, e.g. 0.1.0 (required — must match Cargo.toml)'
+        required: true
+        type: string
+      platforms:
+        description: 'Comma-separated targets to build, or "all"'
+        required: false
+        default: 'all'
+        type: string
+      publish_github_release:
+        description: 'Create/update the GitHub Release'
+        type: boolean
+        default: true
+      publish_npm:
+        description: 'Publish to npm'
+        type: boolean
+        default: false
+      publish_homebrew:
+        description: 'Push to the Homebrew tap (also needs HOMEBREW_TAP_TOKEN set)'
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,12 +37,15 @@ env:
 jobs:
   verify-branch:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Verify tag is on main branch
+        if: github.event_name == 'push'
         run: |
           git fetch origin main
           if ! git merge-base --is-ancestor ${{ github.sha }} origin/main; then
@@ -30,12 +53,23 @@ jobs:
             exit 1
           fi
 
-      - name: Verify Cargo.toml version matches the tag
+      - name: Resolve version
+        id: resolve
         run: |
-          PKG_VERSION="v$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
-          GIT_TAG="${{ github.ref_name }}"
-          if [ "$PKG_VERSION" != "$GIT_TAG" ]; then
-            echo "Version mismatch: Cargo.toml=$PKG_VERSION, tag=$GIT_TAG"
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Cargo.toml version matches
+        run: |
+          set -euo pipefail
+          PKG_VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          if [ "$PKG_VERSION" != "${{ steps.resolve.outputs.version }}" ]; then
+            echo "Version mismatch: Cargo.toml=$PKG_VERSION, requested=${{ steps.resolve.outputs.version }}"
             exit 1
           fi
 
@@ -57,20 +91,71 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --verbose
 
-  build:
+  # Resolves the build matrix + publish toggles from either trigger type.
+  plan:
     needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.compute.outputs.matrix }}
+      do_github_release: ${{ steps.compute.outputs.do_github_release }}
+      do_npm: ${{ steps.compute.outputs.do_npm }}
+      do_homebrew: ${{ steps.compute.outputs.do_homebrew }}
+    steps:
+      - id: compute
+        shell: bash
+        run: |
+          set -euo pipefail
+          declare -A ALL_TARGETS=(
+            [x86_64-apple-darwin]=macos-latest
+            [aarch64-apple-darwin]=macos-latest
+            [x86_64-unknown-linux-gnu]=ubuntu-latest
+            [x86_64-pc-windows-msvc]=windows-latest
+          )
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            PLATFORMS="all"
+            DO_GH="true"
+            DO_NPM="true"
+            DO_BREW="true"
+          else
+            PLATFORMS="${{ inputs.platforms }}"
+            DO_GH="${{ inputs.publish_github_release }}"
+            DO_NPM="${{ inputs.publish_npm }}"
+            DO_BREW="${{ inputs.publish_homebrew }}"
+          fi
+
+          if [ -z "$PLATFORMS" ] || [ "$PLATFORMS" = "all" ]; then
+            SELECTED=("${!ALL_TARGETS[@]}")
+          else
+            IFS=',' read -ra SELECTED <<< "$PLATFORMS"
+          fi
+
+          matrix_json="["
+          first=true
+          for raw in "${SELECTED[@]}"; do
+            t="$(echo "$raw" | xargs)"
+            os="${ALL_TARGETS[$t]:-}"
+            if [ -z "$os" ]; then
+              echo "::error::unknown target '$t'. Valid targets: ${!ALL_TARGETS[*]}"
+              exit 1
+            fi
+            [ "$first" = true ] || matrix_json+=","
+            matrix_json+="{\"target\":\"$t\",\"os\":\"$os\"}"
+            first=false
+          done
+          matrix_json+="]"
+
+          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
+          echo "do_github_release=$DO_GH" >> "$GITHUB_OUTPUT"
+          echo "do_npm=$DO_NPM" >> "$GITHUB_OUTPUT"
+          echo "do_homebrew=$DO_BREW" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [verify-branch, plan]
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -88,31 +173,30 @@ jobs:
 
       - name: Package release assets
         shell: bash
+        env:
+          VERSION: ${{ needs.verify-branch.outputs.version }}
         run: |
           set -euo pipefail
           sha256() {
             if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi
           }
 
-          version="${GITHUB_REF_NAME#v}"
           target="${{ matrix.target }}"
           ext=""
           case "$target" in *windows*) ext=".exe" ;; esac
           bin="target/${target}/release/vaqum${ext}"
 
-          # Bare binary + checksum: what the npm postinstall fetches directly.
-          bare="vaqum-${version}-${target}${ext}"
+          # Bare binary: what npm's postinstall fetches directly.
+          bare="vaqum-${VERSION}-${target}${ext}"
           cp "$bin" "$bare"
           chmod +x "$bare" || true
           sha256 "$bare" > "${bare}.sha256"
 
-          # Tarball (binary + docs) + checksum: for Homebrew and install.sh
-          # (works on Windows too — tar has shipped with Windows since 10
-          # 1803, and it's on PATH in GitHub's windows-latest image).
-          stage="$(mktemp -d)/vaqum-${version}-${target}"
+          # Tarball: for Homebrew and install.sh.
+          stage="$(mktemp -d)/vaqum-${VERSION}-${target}"
           mkdir -p "$stage"
           cp "$bin" README.md LICENSE "$stage"/
-          archive="vaqum-${version}-${target}.tar.gz"
+          archive="vaqum-${VERSION}-${target}.tar.gz"
           tar -czf "$archive" -C "$stage" .
           sha256 "$archive" > "${archive}.sha256"
 
@@ -125,7 +209,8 @@ jobs:
           if-no-files-found: error
 
   github-release:
-    needs: build
+    needs: [verify-branch, plan, build]
+    if: needs.plan.outputs.do_github_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -138,11 +223,13 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.verify-branch.outputs.version }}
           files: dist/*
           generate_release_notes: true
 
   npm-publish:
-    needs: github-release
+    needs: [verify-branch, plan, github-release]
+    if: needs.plan.outputs.do_npm == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -158,12 +245,12 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Verify npm package version matches the tag
+      - name: Verify npm package version matches
         run: |
-          PKG_VERSION="v$(node -p "require('./package.json').version")"
-          GIT_TAG="${{ github.ref_name }}"
-          if [ "$PKG_VERSION" != "$GIT_TAG" ]; then
-            echo "Version mismatch: npm/package.json=$PKG_VERSION, tag=$GIT_TAG"
+          set -euo pipefail
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "${{ needs.verify-branch.outputs.version }}" ]; then
+            echo "Version mismatch: npm/package.json=$PKG_VERSION, requested=${{ needs.verify-branch.outputs.version }}"
             exit 1
           fi
 
@@ -172,7 +259,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   check-homebrew-secret:
-    needs: github-release
+    needs: [plan, github-release]
+    if: needs.plan.outputs.do_homebrew == 'true'
     runs-on: ubuntu-latest
     outputs:
       has-token: ${{ steps.check.outputs.has-token }}
@@ -186,11 +274,10 @@ jobs:
           fi
 
   homebrew-tap:
-    needs: [github-release, check-homebrew-secret]
+    needs: [verify-branch, plan, github-release, check-homebrew-secret]
     runs-on: ubuntu-latest
-    # Best-effort: only runs once the tap repo + PAT are set up. See
-    # packaging/homebrew/README.md for the one-time setup this depends on.
-    if: needs.check-homebrew-secret.outputs.has-token == 'true'
+    # See packaging/homebrew/README.md for the tap's one-time setup.
+    if: needs.plan.outputs.do_homebrew == 'true' && needs.check-homebrew-secret.outputs.has-token == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -200,13 +287,14 @@ jobs:
           merge-multiple: true
 
       - name: Render formula
+        env:
+          VERSION: ${{ needs.verify-branch.outputs.version }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          sha_arm="$(cut -d' ' -f1 "dist/vaqum-${version}-aarch64-apple-darwin.tar.gz.sha256")"
-          sha_intel="$(cut -d' ' -f1 "dist/vaqum-${version}-x86_64-apple-darwin.tar.gz.sha256")"
-          sha_linux="$(cut -d' ' -f1 "dist/vaqum-${version}-x86_64-unknown-linux-gnu.tar.gz.sha256")"
-          ./packaging/homebrew/render.sh "$version" "$sha_intel" "$sha_arm" "$sha_linux" > vaqum.rb
+          sha_arm="$(cut -d' ' -f1 "dist/vaqum-${VERSION}-aarch64-apple-darwin.tar.gz.sha256")"
+          sha_intel="$(cut -d' ' -f1 "dist/vaqum-${VERSION}-x86_64-apple-darwin.tar.gz.sha256")"
+          sha_linux="$(cut -d' ' -f1 "dist/vaqum-${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256")"
+          ./packaging/homebrew/render.sh "$VERSION" "$sha_intel" "$sha_arm" "$sha_linux" > vaqum.rb
 
       - name: Push to homebrew-vaqum tap
         run: |
@@ -219,5 +307,5 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add Formula/vaqum.rb
           git diff --cached --quiet && exit 0
-          git commit -m "vaqum ${GITHUB_REF_NAME}"
+          git commit -m "vaqum v${{ needs.verify-branch.outputs.version }}"
           git push

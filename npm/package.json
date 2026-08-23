@@ -13,16 +13,31 @@
   "scripts": {
     "postinstall": "node install.js"
   },
-  "keywords": ["compression", "zstd", "lzma", "shred", "cli", "diff", "dedupe"],
+  "keywords": [
+    "compression",
+    "zstd",
+    "lzma",
+    "shred",
+    "cli",
+    "diff",
+    "dedupe"
+  ],
   "author": "Marcus Chukwuoma <marcus2cu@gmail.com> (https://github.com/marcdomain)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/marcdomain/vaqum.git"
+    "url": "git+https://github.com/marcdomain/vaqum.git"
   },
   "homepage": "https://github.com/marcdomain/vaqum#readme",
-  "os": ["darwin", "linux", "win32"],
-  "cpu": ["x64", "arm64"],
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
   "engines": {
     "node": ">=16"
   }

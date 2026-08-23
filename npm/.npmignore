@@ -1,0 +1,5 @@
+# The native binary is fetched by install.js's postinstall step at install
+# time — never ship it in the package itself.
+/bin/vaqum-bin
+/bin/vaqum-bin.exe
+/node_modules

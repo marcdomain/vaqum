@@ -8,10 +8,15 @@
 
 const crypto = require("crypto");
 const fs = require("fs");
+const http = require("http");
 const https = require("https");
 const path = require("path");
 
 const pkg = require("./package.json");
+
+// Override for local testing — points the download at a local server
+// instead of GitHub Releases. Unset in normal use.
+const BASE_URL = process.env.VAQUM_NPM_BASE_URL || `https://github.com/marcdomain/vaqum/releases/download/v${pkg.version}`;
 
 const PLATFORM_TARGETS = {
   "darwin-x64": "x86_64-apple-darwin",
@@ -33,8 +38,9 @@ function targetTriple() {
 }
 
 function get(url, redirectsLeft = 5) {
+  const client = url.startsWith("http://") ? http : https;
   return new Promise((resolve, reject) => {
-    https
+    client
       .get(url, { headers: { "user-agent": "vaqum-npm-installer" } }, (res) => {
         const { statusCode, headers } = res;
         if ([301, 302, 303, 307, 308].includes(statusCode) && headers.location && redirectsLeft > 0) {
@@ -59,12 +65,13 @@ function get(url, redirectsLeft = 5) {
 async function main() {
   const target = targetTriple();
   const isWindows = target.includes("windows");
-  const version = pkg.version;
-  const base = `https://github.com/marcdomain/vaqum/releases/download/v${version}`;
-  const asset = `vaqum-${version}-${target}${isWindows ? ".exe" : ""}`;
+  const asset = `vaqum-${pkg.version}-${target}${isWindows ? ".exe" : ""}`;
 
   console.log(`vaqum: downloading ${asset} ...`);
-  const [binary, sha256Sidecar] = await Promise.all([get(`${base}/${asset}`), get(`${base}/${asset}.sha256`)]);
+  const [binary, sha256Sidecar] = await Promise.all([
+    get(`${BASE_URL}/${asset}`),
+    get(`${BASE_URL}/${asset}.sha256`),
+  ]);
 
   const expected = sha256Sidecar.toString("utf8").trim().split(/\s+/)[0];
   const actual = crypto.createHash("sha256").update(binary).digest("hex");
