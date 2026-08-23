@@ -6,6 +6,8 @@ Losslessly compress/decompress files, diff them (with an HTML report),
 find duplicates, and securely shred them — from the command line.
 See [`vaqum.md`](./vaqum.md) for the design brief.
 
+![vaqum demo](demo.gif)
+
 ## Install
 
 ```sh
@@ -52,6 +54,10 @@ CI runs the same checks on Linux, macOS, and Windows for every push/PR.
 Tagged releases (`vX.Y.Z`) trigger `.github/workflows/release.yml`, which
 cross-builds binaries, publishes a GitHub Release, and pushes to npm and
 the Homebrew tap — see `packaging/homebrew/README.md` for tap setup.
+
+Re-record the demo above with [VHS](https://github.com/charmbracelet/vhs)
+after `cargo install --path .`: `vhs demo.tape` (uses `demo-setup.sh` for
+its sample files).
 
 ## License
 
