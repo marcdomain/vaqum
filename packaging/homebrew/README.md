@@ -1,8 +1,6 @@
 # vaqum Homebrew tap
 
-Homebrew tap for [vaqum](https://github.com/marcdomain/vaqum) — losslessly
-compress/decompress files, diff them, find duplicates, and securely shred
-them, from the command line.
+Homebrew tap for [vaqum](https://github.com/marcdomain/vaqum) — Losslessly compress files faster and smaller than zip/gzip, decompress them, diff (displayed on editor or HTML report), search and find duplicates, and securely shred them — from the command line.
 
 ![vaqum demo](https://raw.githubusercontent.com/marcdomain/vaqum/main/demo.gif)
 

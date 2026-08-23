@@ -2,9 +2,7 @@
 
 [![CI](https://github.com/marcdomain/vaqum/actions/workflows/ci.yml/badge.svg)](https://github.com/marcdomain/vaqum/actions/workflows/ci.yml)
 
-Losslessly compress/decompress files, diff them (with an HTML report),
-find duplicates, and securely shred them — from the command line.
-See [`vaqum.md`](./vaqum.md) for the design brief.
+Losslessly compress files faster and smaller than zip/gzip, decompress them, diff (displayed on editor or HTML report), search and find duplicates, and securely shred them — from the command line.
 
 ![vaqum demo](demo.gif)
 

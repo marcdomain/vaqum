@@ -1,7 +1,6 @@
 # vaqum
 
-Losslessly compress/decompress files, diff them (with an HTML report), find
-duplicates, and securely shred them — from the command line.
+Losslessly compress files faster and smaller than zip/gzip, decompress them, diff (displayed on editor or HTML report), search and find duplicates, and securely shred them — from the command line.
 
 ![vaqum demo](https://raw.githubusercontent.com/marcdomain/vaqum/main/demo.gif)
 

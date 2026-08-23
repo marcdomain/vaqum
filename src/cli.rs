@@ -43,7 +43,7 @@ pub struct CompressArgs {
     pub output: Option<PathBuf>,
 
     /// Compression level, 1-22 (zstd scale)
-    #[arg(short = 'l', long, default_value_t = 19, value_parser = clap::value_parser!(u8).range(1..=22))]
+    #[arg(short = 'l', long, default_value_t = 9, value_parser = clap::value_parser!(u8).range(1..=22))]
     pub level: u8,
 
     /// Use LZMA/xz max-compression mode instead of zstd (slower, smaller)
