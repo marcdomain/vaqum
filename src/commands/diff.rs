@@ -5,7 +5,7 @@
 //! differences found, 2 trouble. See `main.rs` for where that's enforced.
 
 use std::fs::{self, File};
-use std::io::{IsTerminal, Read};
+use std::io::{IsTerminal, Read, Write as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -22,7 +22,7 @@ pub fn run(args: DiffArgs) -> Result<bool> {
     let a = resolve(&args.a)?;
     let b = resolve(&args.b)?;
 
-    let (identical, html_body) = match (&a, &b) {
+    let (identical, html_body, tree_for_editor) = match (&a, &b) {
         (
             Resolved::File {
                 name: na,
@@ -36,7 +36,7 @@ pub fn run(args: DiffArgs) -> Result<bool> {
             let identical = ba == bb;
             print_file_diff(na, ba, nb, bb, identical);
             let body = html_file_diff(na, ba, nb, bb, identical);
-            (identical, body)
+            (identical, body, None)
         }
         (
             Resolved::Dir {
@@ -52,7 +52,8 @@ pub fn run(args: DiffArgs) -> Result<bool> {
             let tree = compute_tree_diff(ra, rb, threads)?;
             print_tree_diff(na, nb, &tree, args.verbose);
             let body = html_tree_diff(na, nb, &tree);
-            (tree.is_identical(), body)
+            let identical = tree.is_identical();
+            (identical, body, Some(tree))
         }
         _ => bail!(
             "cannot compare a file against a directory: '{}' is a {}, '{}' is a {}",
@@ -85,7 +86,120 @@ pub fn run(args: DiffArgs) -> Result<bool> {
         }
     }
 
+    if args.editor {
+        open_in_editor(&args, &a, &b, identical, tree_for_editor.as_ref())?;
+    }
+
     Ok(identical)
+}
+
+// ---------------------------------------------------------------------
+// Editor mode (`--editor`) — hands off to VS Code's (or another editor's)
+// live, editable `--diff` view instead of a static report.
+// ---------------------------------------------------------------------
+
+fn open_in_editor(
+    args: &DiffArgs,
+    a: &Resolved,
+    b: &Resolved,
+    identical: bool,
+    tree: Option<&TreeDiff>,
+) -> Result<()> {
+    let editor = std::env::var("VAQUM_DIFF_EDITOR").unwrap_or_else(|_| "code".to_string());
+
+    match (a, b, tree) {
+        (Resolved::File { name: na, .. }, Resolved::File { name: nb, .. }, None) => {
+            if identical {
+                println!("\n(no editor diff opened — files are identical)");
+                return Ok(());
+            }
+            let (path_a, from_archive_a) = materialize_for_editor(&args.a, a)?;
+            let (path_b, from_archive_b) = materialize_for_editor(&args.b, b)?;
+            if from_archive_a || from_archive_b {
+                println!(
+                    "\nnote: side(s) decompressed from a .vaqum archive are scratch copies — edits there won't be saved back into the archive."
+                );
+            }
+            println!("\nopening '{na}' vs '{nb}' in `{editor} --diff` ...");
+            launch_editor_diff(&editor, &path_a, &path_b);
+        }
+        (Resolved::Dir { root: ra, .. }, Resolved::Dir { root: rb, .. }, Some(tree)) => {
+            open_editor_for_tree(&editor, ra, rb, tree);
+        }
+        _ => unreachable!("run() already rejected file-vs-directory comparisons"),
+    }
+
+    Ok(())
+}
+
+/// Returns a real on-disk path an editor can open, plus whether it's a
+/// throwaway scratch copy (decompressed from a `.vaqum` archive) rather
+/// than the user's actual file.
+fn materialize_for_editor(original: &Path, resolved: &Resolved) -> Result<(PathBuf, bool)> {
+    let from_archive = original.is_file() && is_vaqum_file(original).unwrap_or(false);
+    let path = match resolved {
+        Resolved::Dir { root, .. } => root.clone(),
+        Resolved::File { bytes, .. } => {
+            if from_archive {
+                let mut tmp = tempfile::Builder::new()
+                    .prefix("vaqum-diff-")
+                    .tempfile()
+                    .context("failed to create a scratch file for the editor")?;
+                tmp.write_all(bytes)?;
+                let (_, path) = tmp.keep().context("failed to persist scratch file")?;
+                path
+            } else {
+                original.to_path_buf()
+            }
+        }
+    };
+    Ok((path, from_archive))
+}
+
+fn open_editor_for_tree(editor: &str, root_a: &Path, root_b: &Path, tree: &TreeDiff) {
+    const MAX_TABS: usize = 15;
+
+    let text_modified: Vec<&ModifiedFile> = tree
+        .modified
+        .iter()
+        .filter(|f| matches!(f.content, ModifiedContent::Text { .. }))
+        .collect();
+
+    if text_modified.is_empty() {
+        println!("\n(no modified text files to open in the editor)");
+        return;
+    }
+
+    let opening = text_modified.len().min(MAX_TABS);
+    println!("\nopening {opening} modified file(s) in `{editor} --diff` ...");
+    for f in text_modified.iter().take(MAX_TABS) {
+        launch_editor_diff(editor, &root_a.join(&f.rel_path), &root_b.join(&f.rel_path));
+    }
+    if text_modified.len() > MAX_TABS {
+        println!(
+            "  ({} more modified file(s) not opened — use --html for the full report)",
+            text_modified.len() - MAX_TABS
+        );
+    }
+    let binary_count = tree.modified.len() - text_modified.len();
+    if binary_count > 0 {
+        println!("  ({binary_count} modified binary file(s) skipped — not diffable as text)");
+    }
+}
+
+fn launch_editor_diff(editor: &str, path_a: &Path, path_b: &Path) {
+    let result = std::process::Command::new(editor)
+        .arg("--diff")
+        .arg(path_a)
+        .arg(path_b)
+        .status();
+    if let Err(err) = result {
+        eprintln!(
+            "warning: could not launch `{editor} --diff`: {err}. Is it installed and on PATH? \
+(in VS Code: Cmd/Ctrl+Shift+P -> \"Shell Command: Install 'code' command in PATH\"). \
+Override the editor with $VAQUM_DIFF_EDITOR."
+        );
+    }
 }
 
 // ---------------------------------------------------------------------

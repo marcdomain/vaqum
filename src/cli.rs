@@ -145,6 +145,18 @@ pub struct DiffArgs {
     /// file first if --html wasn't given)
     #[arg(long)]
     pub open: bool,
+
+    /// Open the diff in an editor's live, editable diff view instead of
+    /// (or alongside) printing to the terminal. Runs `code --diff` by
+    /// default (VS Code); override with $VAQUM_DIFF_EDITOR for another
+    /// editor that supports the same `<editor> --diff <a> <b>` convention.
+    /// For a plain file vs. a plain file this opens the real files
+    /// directly, so edits save normally; a .vaqum side is decompressed to
+    /// a scratch copy first (noted on screen) since there's nothing on
+    /// disk to edit. For directories, opens one diff tab per modified
+    /// text file (capped, to avoid flooding the editor).
+    #[arg(short, long)]
+    pub editor: bool,
 }
 
 #[derive(Parser)]

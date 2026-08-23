@@ -593,6 +593,89 @@ fn diff_html_report_is_written_and_contains_expected_markers() {
     assert!(html.contains("diff-line"));
 }
 
+#[test]
+#[cfg(unix)]
+fn diff_editor_launches_configured_command_with_diff_flag() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let a = dir.path().join("a.txt");
+    let b = dir.path().join("b.txt");
+    fs::write(&a, "line1\nline2\n").unwrap();
+    fs::write(&b, "line1\nCHANGED\n").unwrap();
+
+    // A fake "editor" that just records how it was invoked, so this test
+    // doesn't depend on VS Code (or any editor) being installed.
+    let log = dir.path().join("editor-invocations.log");
+    let fake_editor = dir.path().join("fake-editor.sh");
+    fs::write(
+        &fake_editor,
+        format!("#!/bin/sh\necho \"$@\" >> \"{}\"\n", log.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&fake_editor, fs::Permissions::from_mode(0o755)).unwrap();
+
+    vaqum()
+        .args(["diff", a.to_str().unwrap(), b.to_str().unwrap(), "--editor"])
+        .env("VAQUM_DIFF_EDITOR", &fake_editor)
+        .assert()
+        .code(1);
+
+    let log_contents = fs::read_to_string(&log).unwrap();
+    assert!(log_contents.contains("--diff"));
+    assert!(log_contents.contains(a.to_str().unwrap()));
+    assert!(log_contents.contains(b.to_str().unwrap()));
+}
+
+#[test]
+#[cfg(unix)]
+fn diff_editor_on_vaqum_archive_uses_a_scratch_copy() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let original = dir.path().join("original.txt");
+    write_sample_text(&original, 20);
+    let archive = dir.path().join("original.txt.vaqum");
+    vaqum()
+        .args(["compress", original.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let changed = dir.path().join("changed.txt");
+    let mut contents = fs::read_to_string(&original).unwrap();
+    contents.push_str("one more line\n");
+    fs::write(&changed, contents).unwrap();
+
+    let log = dir.path().join("editor-invocations.log");
+    let fake_editor = dir.path().join("fake-editor.sh");
+    fs::write(
+        &fake_editor,
+        format!("#!/bin/sh\necho \"$@\" >> \"{}\"\n", log.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&fake_editor, fs::Permissions::from_mode(0o755)).unwrap();
+
+    vaqum()
+        .args([
+            "diff",
+            archive.to_str().unwrap(),
+            changed.to_str().unwrap(),
+            "--editor",
+        ])
+        .env("VAQUM_DIFF_EDITOR", &fake_editor)
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("scratch cop"));
+
+    let log_contents = fs::read_to_string(&log).unwrap();
+    assert!(log_contents.contains("--diff"));
+    // The archive side must NOT be opened at its own .vaqum path (that's
+    // compressed bytes, not text) — it should be a materialized scratch
+    // file elsewhere.
+    assert!(!log_contents.contains(archive.to_str().unwrap()));
+    assert!(log_contents.contains(changed.to_str().unwrap()));
+}
+
 // ---------------------------------------------------------------------
 // dedupe
 // ---------------------------------------------------------------------
