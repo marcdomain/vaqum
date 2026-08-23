@@ -10,7 +10,7 @@ Losslessly compress files faster and smaller than zip/gzip, decompress them, dif
 
 ```sh
 brew tap marcdomain/vaqum && brew install vaqum   # macOS / Linux
-npm install -g vaqum                              # macOS / Linux / Windows
+npm i -g @marcdomain/vaqum                        # macOS / Linux / Windows
 curl -fsSL https://raw.githubusercontent.com/marcdomain/vaqum/main/install.sh | sh   # macOS / Linux, no deps
 irm https://raw.githubusercontent.com/marcdomain/vaqum/main/install.ps1 | iex        # Windows, no deps
 cargo install --path .                            # from source
