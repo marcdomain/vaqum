@@ -25,3 +25,19 @@ printf 'Meeting notes\n- Discuss roadmap\n- Ship v1.0\n' > notes-v1.txt
 printf 'Meeting notes\n- Discuss roadmap\n- Ship v1.0\n- Fix Windows CI\n' > notes-v2.txt
 
 printf 'super secret api key: 12345\n' > secret.txt
+
+# For `diff` on directories: a "backup" vs the current "project" tree —
+# one file edited, one file added.
+mkdir -p project-backup/src project/src
+printf 'fn main() {\n    println!("v1");\n}\n' > project-backup/src/main.rs
+printf '# My Project\n' > project-backup/README.md
+
+printf 'fn main() {\n    println!("v2");\n}\n' > project/src/main.rs
+printf '# My Project\n' > project/README.md
+printf 'pub fn helper() {}\n' > project/src/util.rs
+
+# For `search`: a couple of files with TODO markers to find by content,
+# and a TODO-named directory to find by name.
+mkdir -p app/TODO-cleanup
+printf 'fn main() {\n    // TODO: wire up config\n}\n' > app/main.rs
+printf '// TODO: add tests\npub fn helper() {}\n' > app/util.rs

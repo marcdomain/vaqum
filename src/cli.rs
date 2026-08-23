@@ -28,6 +28,9 @@ pub enum Command {
     Diff(DiffArgs),
     /// Find and report duplicate files in a directory tree
     Dedupe(DedupeArgs),
+    /// Search a file, directory, or subtree for a file name or file content
+    /// match
+    Search(SearchArgs),
 }
 
 #[derive(Parser)]
@@ -178,6 +181,44 @@ pub struct DedupeArgs {
     pub dry_run: bool,
 
     /// Number of threads to use for hashing (default: all cores)
+    #[arg(short, long)]
+    pub threads: Option<usize>,
+}
+
+#[derive(Parser)]
+#[command(
+    after_help = "Exit codes (like grep): 0 = at least one match, 1 = no matches, 2 = trouble.\n\
+Each result line is tagged so it's unambiguous which kind of match it is:\n  \
+name     <path>                  — the file/directory name itself matched\n  \
+content  <path>:<line>: <text>   — that line's content matched, inside <path>"
+)]
+pub struct SearchArgs {
+    /// Text (or regex, with -E) to search for
+    pub pattern: String,
+
+    /// File or directory to search (default: current directory; searched
+    /// recursively when it's a directory)
+    pub path: Option<PathBuf>,
+
+    /// Case-insensitive matching
+    #[arg(short, long)]
+    pub ignore_case: bool,
+
+    /// Treat <pattern> as a regular expression instead of a literal
+    /// substring
+    #[arg(short = 'E', long)]
+    pub regex: bool,
+
+    /// Only match file/directory names, not file content
+    #[arg(long, conflicts_with = "content_only")]
+    pub names_only: bool,
+
+    /// Only match file content, not file/directory names
+    #[arg(long, conflicts_with = "names_only")]
+    pub content_only: bool,
+
+    /// Number of threads to use for scanning file content (default: all
+    /// cores)
     #[arg(short, long)]
     pub threads: Option<usize>,
 }

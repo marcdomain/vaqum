@@ -125,6 +125,18 @@ pub fn set_unix_mode(_path: &Path, _mode: Option<u32>) -> Result<()> {
     Ok(())
 }
 
+/// Heuristic: valid UTF-8 with no NUL byte in the first 8KB looks like
+/// text. Shared by `diff` (to decide whether to line-diff or report
+/// "binary files differ") and `search` (to skip binary files when
+/// grepping content).
+pub fn as_text(bytes: &[u8]) -> Option<&str> {
+    let probe_len = bytes.len().min(8000);
+    if bytes[..probe_len].contains(&0) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()
+}
+
 /// SHA-256 of an in-memory buffer.
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = <sha2::Sha256 as sha2::Digest>::new();

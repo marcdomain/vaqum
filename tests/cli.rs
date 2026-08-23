@@ -758,3 +758,177 @@ fn dedupe_dry_run_link_does_not_modify_anything() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// search
+// ---------------------------------------------------------------------
+
+fn build_search_tree(root: &std::path::Path) {
+    fs::create_dir_all(root.join("src/nested")).unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() {\n    // TODO: handle errors\n}\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/nested/util.rs"), "// TODO: implement this\n").unwrap();
+    fs::write(root.join("README.md"), "no markers here\n").unwrap();
+    fs::create_dir_all(root.join("TODO_folder")).unwrap();
+    fs::write(root.join("src/blob.bin"), [0u8, 159, 146, 150, 0, 1, 2]).unwrap();
+}
+
+#[test]
+fn search_default_mode_finds_both_name_and_content_matches() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("tree");
+    build_search_tree(&root);
+
+    vaqum()
+        .args(["search", "TODO", root.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("name     "))
+        .stdout(predicate::str::contains("TODO_folder"))
+        .stdout(predicate::str::contains("content  "))
+        .stdout(predicate::str::contains("src/main.rs:2:"))
+        .stdout(predicate::str::contains("src/nested/util.rs:1:"));
+}
+
+#[test]
+fn search_names_only_excludes_content_matches() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("tree");
+    build_search_tree(&root);
+
+    vaqum()
+        .args(["search", "TODO", root.to_str().unwrap(), "--names-only"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("name     "))
+        .stdout(predicate::str::contains("TODO_folder"))
+        .stdout(predicate::str::contains("content  ").not());
+}
+
+#[test]
+fn search_content_only_excludes_name_matches() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("tree");
+    build_search_tree(&root);
+
+    vaqum()
+        .args(["search", "TODO", root.to_str().unwrap(), "--content-only"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("content  "))
+        .stdout(predicate::str::contains("name     ").not());
+}
+
+#[test]
+fn search_skips_binary_file_content() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("tree");
+    build_search_tree(&root);
+
+    // The binary file's raw bytes never match as text content, and the
+    // scan must not choke or emit garbage for it.
+    vaqum()
+        .args(["search", "TODO", root.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("blob.bin").not());
+}
+
+#[test]
+fn search_regex_mode() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("tree");
+    build_search_tree(&root);
+
+    vaqum()
+        .args([
+            "search",
+            r"TODO: \w+",
+            root.to_str().unwrap(),
+            "-E",
+            "--content-only",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("handle errors"))
+        .stdout(predicate::str::contains("implement this"));
+}
+
+#[test]
+fn search_case_insensitive() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("tree");
+    build_search_tree(&root);
+
+    vaqum()
+        .args([
+            "search",
+            "todo",
+            root.to_str().unwrap(),
+            "-i",
+            "--content-only",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("handle errors"));
+}
+
+#[test]
+fn search_no_matches_exits_one() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("tree");
+    build_search_tree(&root);
+
+    vaqum()
+        .args([
+            "search",
+            "definitely_not_present_xyz",
+            root.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("no matches"));
+}
+
+#[test]
+fn search_missing_path_exits_two() {
+    vaqum()
+        .args(["search", "x", "/no/such/path/at/all"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn search_single_file_directly() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("tree");
+    build_search_tree(&root);
+
+    vaqum()
+        .args(["search", "TODO", root.join("src/main.rs").to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("content  "))
+        .stdout(predicate::str::contains("handle errors"));
+}
+
+#[test]
+fn search_names_only_and_content_only_are_mutually_exclusive() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("tree");
+    build_search_tree(&root);
+
+    vaqum()
+        .args([
+            "search",
+            "TODO",
+            root.to_str().unwrap(),
+            "--names-only",
+            "--content-only",
+        ])
+        .assert()
+        .failure();
+}

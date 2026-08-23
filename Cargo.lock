@@ -715,6 +715,7 @@ dependencies = [
  "predicates",
  "rand",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

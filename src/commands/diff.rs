@@ -16,7 +16,7 @@ use crate::cli::DiffArgs;
 use crate::codec;
 use crate::dedup;
 use crate::format::{EntryType, Header};
-use crate::util::{TreeFile, hash_bytes, hash_tree, human_bytes};
+use crate::util::{TreeFile, as_text, hash_bytes, hash_tree, human_bytes};
 
 pub fn run(args: DiffArgs) -> Result<bool> {
     let a = resolve(&args.a)?;
@@ -393,15 +393,6 @@ fn read_modified_content(fa: &TreeFile, fb: &TreeFile) -> Result<ModifiedContent
             size_b: fb.size,
         }),
     }
-}
-
-/// Heuristic: valid UTF-8 with no NUL byte in the first 8KB looks like text.
-fn as_text(bytes: &[u8]) -> Option<&str> {
-    let probe_len = bytes.len().min(8000);
-    if bytes[..probe_len].contains(&0) {
-        return None;
-    }
-    std::str::from_utf8(bytes).ok()
 }
 
 // ---------------------------------------------------------------------
