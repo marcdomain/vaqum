@@ -789,8 +789,10 @@ fn search_default_mode_finds_both_name_and_content_matches() {
         .stdout(predicate::str::contains("name     "))
         .stdout(predicate::str::contains("TODO_folder"))
         .stdout(predicate::str::contains("content  "))
-        .stdout(predicate::str::contains("src/main.rs:2:"))
-        .stdout(predicate::str::contains("src/nested/util.rs:1:"));
+        // Path separator is platform-dependent (`/` vs `\`), so match on
+        // the filename:line fragment only, not the full relative path.
+        .stdout(predicate::str::contains("main.rs:2:"))
+        .stdout(predicate::str::contains("util.rs:1:"));
 }
 
 #[test]
