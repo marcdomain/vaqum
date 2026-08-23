@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/marcdomain/vaqum/actions/workflows/ci.yml/badge.svg)](https://github.com/marcdomain/vaqum/actions/workflows/ci.yml)
 
-Losslessly compress files faster and smaller than zip/gzip, decompress them, diff (displayed on editor or HTML report), search and find duplicates, and securely shred them — from the command line.
+Losslessly compress files 5x faster and 12% smaller output than zip/gzip at defaults, decompress them, diff (displayed on editor or HTML report), search and find duplicates, and securely shred them — from the command line.
 
 ![vaqum demo](demo.gif)
 
@@ -10,7 +10,7 @@ Losslessly compress files faster and smaller than zip/gzip, decompress them, dif
 
 ```sh
 brew tap marcdomain/vaqum && brew install vaqum   # macOS / Linux
-npm install -g vaqum                              # macOS / Linux / Windows
+npm i -g @marcdomain/vaqum                        # macOS / Linux / Windows
 curl -fsSL https://raw.githubusercontent.com/marcdomain/vaqum/main/install.sh | sh   # macOS / Linux, no deps
 irm https://raw.githubusercontent.com/marcdomain/vaqum/main/install.ps1 | iex        # Windows, no deps
 cargo install --path .                            # from source
