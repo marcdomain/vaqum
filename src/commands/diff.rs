@@ -534,11 +534,24 @@ ul.filelist { list-style: none; margin: 0; padding: 0.5rem 1rem 0.75rem; }
 ul.filelist li { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 2px 0; }
 .filelist-item { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 0.5rem 1rem; }
 .muted { color: var(--muted); }
-.diff { padding: 0.5rem 0; }
-.hunk-header { color: var(--muted); background: var(--hunk-bg); padding: 2px 1rem; font-family: ui-monospace, monospace; font-size: 12px; }
-.diff-line { white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 0 1rem; }
-.diff-line.add { background: var(--add-bg); color: var(--add-fg); }
-.diff-line.del { background: var(--del-bg); color: var(--del-fg); }
+.diff-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; margin: 0.5rem 0; }
+.sbs-diff {
+  width: 100%; border-collapse: collapse; table-layout: fixed;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+}
+.sbs-diff col { width: 50%; }
+.sbs-diff td {
+  padding: 1px 0.75rem; white-space: pre-wrap; word-break: break-word; vertical-align: top;
+  border-right: 1px solid var(--border);
+}
+.sbs-diff td:last-child { border-right: none; }
+.sbs-diff td.hunk-header {
+  color: var(--muted); background: var(--hunk-bg); font-size: 12px; border-right: none;
+}
+.sbs-diff td.ctx { background: transparent; }
+.sbs-diff td.add { background: var(--add-bg); color: var(--add-fg); }
+.sbs-diff td.del { background: var(--del-bg); color: var(--del-fg); }
+.sbs-diff td.empty { background: var(--hunk-bg); }
 .footer { color: var(--muted); font-size: 12px; margin-top: 2rem; }
 "#;
 
@@ -668,37 +681,102 @@ fn html_tree_diff(name_a: &str, name_b: &str, diff: &TreeDiff) -> String {
     out
 }
 
+/// A row in the rendered side-by-side table: either a line unchanged on
+/// both sides, or an old/new pair where either half may be absent (a pure
+/// addition or pure removal).
+enum SbsRow {
+    Equal(String),
+    Change {
+        old: Option<String>,
+        new: Option<String>,
+    },
+}
+
+/// Regroups a hunk's flat change stream (Equal/Delete/Insert, in order)
+/// into side-by-side rows: consecutive delete-runs and insert-runs are
+/// paired off line-by-line (padding the shorter run with blanks), which is
+/// the same pairing every split-view diff (GitHub, VS Code, ...) uses.
+fn pair_for_side_by_side(changes: &[(ChangeTag, String)]) -> Vec<SbsRow> {
+    let mut rows = Vec::new();
+    let mut dels: Vec<String> = Vec::new();
+    let mut inss: Vec<String> = Vec::new();
+
+    for (tag, text) in changes {
+        match tag {
+            ChangeTag::Delete => dels.push(text.clone()),
+            ChangeTag::Insert => inss.push(text.clone()),
+            ChangeTag::Equal => {
+                flush_pending(&mut dels, &mut inss, &mut rows);
+                rows.push(SbsRow::Equal(text.clone()));
+            }
+        }
+    }
+    flush_pending(&mut dels, &mut inss, &mut rows);
+    rows
+}
+
+fn flush_pending(dels: &mut Vec<String>, inss: &mut Vec<String>, rows: &mut Vec<SbsRow>) {
+    let paired = dels.len().max(inss.len());
+    for i in 0..paired {
+        rows.push(SbsRow::Change {
+            old: dels.get(i).cloned(),
+            new: inss.get(i).cloned(),
+        });
+    }
+    dels.clear();
+    inss.clear();
+}
+
 fn html_hunks(text_a: &str, text_b: &str) -> String {
     let diff = TextDiff::from_lines(text_a, text_b);
     let unified = diff.unified_diff();
-    let mut out = String::from("<div class=\"diff\">");
+    let mut out = String::from("<table class=\"sbs-diff\"><colgroup><col/><col/></colgroup>");
     let mut any = false;
+
     for hunk in unified.iter_hunks() {
         any = true;
         out.push_str(&format!(
-            "<div class=\"hunk-header\">{}</div>",
+            "<tr><td class=\"hunk-header\" colspan=\"2\">{}</td></tr>",
             escape_html(&hunk.header().to_string())
         ));
-        for change in hunk.iter_changes() {
-            let (class, prefix) = match change.tag() {
-                ChangeTag::Insert => ("add", '+'),
-                ChangeTag::Delete => ("del", '-'),
-                ChangeTag::Equal => ("ctx", ' '),
-            };
-            let text = change.to_string_lossy();
-            out.push_str(&format!(
-                "<div class=\"diff-line {class}\">{prefix}{}</div>",
-                escape_html(text.trim_end_matches('\n'))
-            ));
+
+        let changes: Vec<(ChangeTag, String)> = hunk
+            .iter_changes()
+            .map(|c| {
+                (
+                    c.tag(),
+                    c.to_string_lossy().trim_end_matches('\n').to_string(),
+                )
+            })
+            .collect();
+
+        for row in pair_for_side_by_side(&changes) {
+            match row {
+                SbsRow::Equal(text) => {
+                    let cell = escape_html(&text);
+                    out.push_str(&format!(
+                        "<tr><td class=\"ctx\">{cell}</td><td class=\"ctx\">{cell}</td></tr>"
+                    ));
+                }
+                SbsRow::Change { old, new } => {
+                    let old_cell = old
+                        .map(|t| format!("<td class=\"del\">{}</td>", escape_html(&t)))
+                        .unwrap_or_else(|| "<td class=\"empty\"></td>".to_string());
+                    let new_cell = new
+                        .map(|t| format!("<td class=\"add\">{}</td>", escape_html(&t)))
+                        .unwrap_or_else(|| "<td class=\"empty\"></td>".to_string());
+                    out.push_str(&format!("<tr>{old_cell}{new_cell}</tr>"));
+                }
+            }
         }
     }
+
+    out.push_str("</table>");
     if !any {
-        out.push_str(
-            "<p class=\"muted\">No line-level differences (whitespace/newline only?).</p>",
-        );
+        return "<p class=\"muted\">No line-level differences (whitespace/newline only?).</p>"
+            .to_string();
     }
-    out.push_str("</div>");
-    out
+    format!("<div class=\"diff-scroll\">{out}</div>")
 }
 
 fn escape_html(s: &str) -> String {

@@ -590,7 +590,12 @@ fn diff_html_report_is_written_and_contains_expected_markers() {
     let html = fs::read_to_string(&report).unwrap();
     assert!(html.starts_with("<!doctype html>"));
     assert!(html.contains("CHANGED"));
-    assert!(html.contains("diff-line"));
+    assert!(
+        html.contains("sbs-diff"),
+        "should render as a side-by-side table"
+    );
+    assert!(html.contains("class=\"add\""));
+    assert!(html.contains("class=\"del\""));
 }
 
 #[test]

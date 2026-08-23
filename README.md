@@ -24,13 +24,20 @@ The Homebrew tap + install can also be done in one line:
 ```sh
 vaqum compress <path> [-o out] [-l 1-22] [--max] [-t threads] [-r] [--dedup] [--dry-run] [-v]
 vaqum decompress <path.vaqum> [-o dir] [-v] [--verify]
-vaqum diff <a> <b> [--html report.html] [--open] [-v]   # files, dirs, or .vaqum archives, any mix
-vaqum dedupe <dir> [--link] [--dry-run] [-v]             # find (and optionally hardlink) duplicate files
+vaqum diff <a> <b> [--html report.html] [--open] [-e|--editor] [-v]   # files, dirs, or .vaqum archives, any mix
+vaqum dedupe <dir> [--link] [--dry-run] [-t threads] [-v]             # find (and optionally hardlink) duplicate files
 vaqum shred <path> [-r] [-p passes] [-y] [--dry-run]
 vaqum info <path.vaqum>
 ```
 
 Run `vaqum <command> --help` for full flag documentation.
+
+`diff` has three stackable output modes:
+
+- *(default)* — unified diff printed to the terminal
+- `--html <file>` — self-contained, offline, side-by-side HTML report
+- `--open` — same HTML report, written to a temp file and opened in your default browser (skip `--html` to use this alone)
+- `-e, --editor` — hands off to `code --diff a b` (VS Code's live, editable split view); override the editor with `$VAQUM_DIFF_EDITOR`. For directories, opens one tab per modified text file. A `.vaqum` side is decompressed to a scratch copy first — edits there don't save back into the archive.
 
 ## Development
 
