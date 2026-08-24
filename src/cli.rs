@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "vaqum",
+    bin_name = "vaqum",
     version,
     about = "Losslessly compress, decompress, and securely shred files.",
     long_about = None,
