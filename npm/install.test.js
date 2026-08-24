@@ -11,16 +11,16 @@ test("every declared platform maps to a real cargo target triple", () => {
     "darwin-arm64": "aarch64-apple-darwin",
     "linux-x64": "x86_64-unknown-linux-gnu",
     "linux-arm64": "aarch64-unknown-linux-musl",
-    "android-arm64": "aarch64-unknown-linux-musl",
+    "android-arm64": "aarch64-linux-android",
     "win32-x64": "x86_64-pc-windows-msvc",
   };
   assert.deepEqual(PLATFORM_TARGETS, expected);
 });
 
-test("linux-arm64 and android-arm64 share the same musl binary", () => {
-  // Termux reports process.platform as "android", not "linux" — this is
-  // what actually lets `npm install` work there at all.
-  assert.equal(PLATFORM_TARGETS["android-arm64"], PLATFORM_TARGETS["linux-arm64"]);
+test("android-arm64 uses its own NDK-built target, not the generic Linux one", () => {
+  // Android rejects the musl target's non-PIE binary at the kernel level,
+  // so Termux needs a real aarch64-linux-android build, not linux-arm64's.
+  assert.notEqual(PLATFORM_TARGETS["android-arm64"], PLATFORM_TARGETS["linux-arm64"]);
 });
 
 test("targetTriple() resolves the current platform when supported", (t) => {

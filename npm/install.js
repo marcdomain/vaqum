@@ -23,9 +23,8 @@ const PLATFORM_TARGETS = {
   "darwin-arm64": "aarch64-apple-darwin",
   "linux-x64": "x86_64-unknown-linux-gnu",
   "linux-arm64": "aarch64-unknown-linux-musl",
-  // Node on Termux reports platform "android", not "linux" — same static
-  // musl binary serves both.
-  "android-arm64": "aarch64-unknown-linux-musl",
+  // Node on Termux reports platform "android", not "linux".
+  "android-arm64": "aarch64-linux-android",
   "win32-x64": "x86_64-pc-windows-msvc",
 };
 
