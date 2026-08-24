@@ -91,7 +91,11 @@ async function main() {
   console.log(`vaqum: installed native binary for ${target}`);
 }
 
-main().catch((err) => {
-  console.error(`vaqum postinstall failed: ${err.message}`);
-  process.exit(1);
-});
+module.exports = { PLATFORM_TARGETS, targetTriple };
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(`vaqum postinstall failed: ${err.message}`);
+    process.exit(1);
+  });
+}

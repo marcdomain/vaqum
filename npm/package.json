@@ -11,7 +11,8 @@
     "vaqum": "bin/vaqum.js"
   },
   "scripts": {
-    "postinstall": "node install.js"
+    "postinstall": "node install.js",
+    "test": "node --test"
   },
   "keywords": [
     "compression",
