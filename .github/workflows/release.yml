@@ -109,7 +109,13 @@ jobs:
             [x86_64-apple-darwin]=macos-latest
             [aarch64-apple-darwin]=macos-latest
             [x86_64-unknown-linux-gnu]=ubuntu-latest
+            [aarch64-unknown-linux-musl]=ubuntu-latest
             [x86_64-pc-windows-msvc]=windows-latest
+          )
+          # Targets that don't run natively on their runner's arch need
+          # cross-rs/cross (Docker-based) instead of plain `cargo build`.
+          declare -A CROSS_TARGETS=(
+            [aarch64-unknown-linux-musl]=1
           )
 
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -139,8 +145,10 @@ jobs:
               echo "::error::unknown target '$t'. Valid targets: ${!ALL_TARGETS[*]}"
               exit 1
             fi
+            use_cross="false"
+            [ -n "${CROSS_TARGETS[$t]:-}" ] && use_cross="true"
             [ "$first" = true ] || matrix_json+=","
-            matrix_json+="{\"target\":\"$t\",\"os\":\"$os\"}"
+            matrix_json+="{\"target\":\"$t\",\"os\":\"$os\",\"use_cross\":$use_cross}"
             first=false
           done
           matrix_json+="]"
@@ -168,8 +176,18 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+
       - name: Build release binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+        shell: bash
 
       - name: Package release assets
         shell: bash
