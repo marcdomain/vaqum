@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::cli::CompressArgs;
 use crate::codec;
+use crate::crypto;
 use crate::dedup;
 use crate::format::{Algorithm, CountingWriter, EntryType, HashingWriter, Header};
 use crate::util::human_bytes;
@@ -53,7 +54,12 @@ pub fn run(args: CompressArgs) -> Result<()> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| input.display().to_string());
 
+    let wants_encryption = args.encrypt || args.key_file.is_some();
+
     if args.dry_run {
+        if wants_encryption {
+            bail!("--dry-run doesn't support -e/--key-file; it only estimates compression");
+        }
         let stats = build_payload(
             input,
             is_dir,
@@ -63,11 +69,26 @@ pub fn run(args: CompressArgs) -> Result<()> {
             threads,
             io::sink(),
             args.verbose,
+            None,
         )?;
         println!("(dry run) would compress '{}':", input.display());
         print_summary(&stats, algorithm, args.dedup);
         return Ok(());
     }
+
+    let encryption = if wants_encryption {
+        let key_material = match &args.key_file {
+            Some(path) => fs::read(path)
+                .with_context(|| format!("failed to read key file {}", path.display()))?,
+            None => crypto::prompt_new_password()?.into_bytes(),
+        };
+        let salt = crypto::random_salt();
+        let nonce_prefix = crypto::random_nonce_prefix();
+        let key = crypto::derive_key(&key_material, &salt)?;
+        Some((key, nonce_prefix, salt))
+    } else {
+        None
+    };
 
     let output_path = args
         .output
@@ -78,6 +99,9 @@ pub fn run(args: CompressArgs) -> Result<()> {
     let stats = {
         let tmp_file = File::create(&tmp_path)
             .with_context(|| format!("failed to create temporary file {}", tmp_path.display()))?;
+        let encrypt_key = encryption
+            .as_ref()
+            .map(|(key, nonce_prefix, _)| (key, nonce_prefix));
         let result = build_payload(
             input,
             is_dir,
@@ -87,6 +111,7 @@ pub fn run(args: CompressArgs) -> Result<()> {
             threads,
             tmp_file,
             args.verbose,
+            encrypt_key,
         );
         if result.is_err() {
             let _ = fs::remove_file(&tmp_path);
@@ -94,12 +119,19 @@ pub fn run(args: CompressArgs) -> Result<()> {
         result?
     };
 
+    let (salt, nonce_prefix) = match &encryption {
+        Some((_, nonce_prefix, salt)) => (*salt, *nonce_prefix),
+        None => ([0u8; crypto::SALT_LEN], [0u8; crypto::NONCE_PREFIX_LEN]),
+    };
     let header = Header {
         entry_type,
         algorithm,
         dedup: args.dedup,
+        encrypted: wants_encryption,
         original_size: stats.original_size,
         checksum: stats.checksum,
+        salt,
+        nonce_prefix,
         name,
     };
 
@@ -108,11 +140,19 @@ pub fn run(args: CompressArgs) -> Result<()> {
     write_result?;
 
     let total_out = header.on_disk_len() + stats.compressed_size;
+    let verb = if wants_encryption {
+        "Compressed and encrypted"
+    } else {
+        "Compressed"
+    };
     println!(
-        "✔ Compressed '{}' -> '{}'",
+        "✔ {verb} '{}' -> '{}'",
         input.display(),
         output_path.display()
     );
+    if wants_encryption {
+        println!("  encryption:   ChaCha20-Poly1305, Argon2id KDF");
+    }
     print_summary(&stats, algorithm, args.dedup);
     let ratio = if stats.original_size > 0 {
         stats.original_size as f64 / total_out.max(1) as f64
@@ -145,9 +185,11 @@ fn build_payload<W: Write>(
     threads: usize,
     dest: W,
     verbose: bool,
+    encrypt_key: Option<(&crypto::Key, &crypto::NoncePrefix)>,
 ) -> Result<PayloadStats> {
     let counting = CountingWriter::new(dest);
-    let encoder = codec::Encoder::new(counting, algorithm, level, threads as u32)?;
+    let encrypt_writer = crypto::EncryptWriter::new(counting, encrypt_key);
+    let encoder = codec::Encoder::new(encrypt_writer, algorithm, level, threads as u32)?;
     let hashing = HashingWriter::new(encoder);
 
     let hashing = if is_dir {
@@ -175,9 +217,12 @@ fn build_payload<W: Write>(
     };
 
     let (encoder, original_size, checksum) = hashing.into_inner_with_stats();
-    let counting = encoder
+    let encrypt_writer = encoder
         .finish()
         .context("failed to finalize compressed stream")?;
+    let counting = encrypt_writer
+        .finish()
+        .context("failed to finalize encrypted stream")?;
     let compressed_size = counting.count();
 
     Ok(PayloadStats {

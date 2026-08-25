@@ -35,6 +35,10 @@ pub fn run(args: InfoArgs) -> Result<()> {
     );
     println!("  on disk:      {}", human_bytes(total_size));
     println!("  checksum:     sha256:{}", hex_encode(&header.checksum));
+    println!(
+        "  encrypted:    {}",
+        if header.encrypted { "yes" } else { "no" }
+    );
 
     Ok(())
 }

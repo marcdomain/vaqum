@@ -70,6 +70,15 @@ pub struct CompressArgs {
     /// Show per-file stats
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Encrypt the output (ChaCha20-Poly1305, prompts for a password)
+    #[arg(short, long, conflicts_with = "key_file")]
+    pub encrypt: bool,
+
+    /// Encrypt the output using this file's bytes as the key material,
+    /// instead of a password
+    #[arg(long)]
+    pub key_file: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -88,6 +97,19 @@ pub struct DecompressArgs {
     /// Checksum-verify output matches original hash
     #[arg(long)]
     pub verify: bool,
+
+    /// Decrypt using this file's bytes as the key material, instead of a
+    /// password prompt
+    #[arg(long)]
+    pub key_file: Option<PathBuf>,
+
+    /// Abort if the archive's compression ratio exceeds n:1
+    #[arg(long, default_value_t = crate::bomb::DEFAULT_MAX_RATIO)]
+    pub max_ratio: f64,
+
+    /// Bypass the archive bomb ratio/disk-space safety check
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Parser)]

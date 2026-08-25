@@ -1,6 +1,8 @@
+mod bomb;
 mod cli;
 mod codec;
 mod commands;
+mod crypto;
 mod dedup;
 mod format;
 mod util;

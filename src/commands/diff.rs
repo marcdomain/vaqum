@@ -265,6 +265,12 @@ fn resolve_vaqum(path: &Path) -> Result<Resolved> {
     let mut in_file =
         File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let header = Header::read(&mut in_file)?;
+    if header.encrypted {
+        bail!(
+            "'{}' is encrypted; diff doesn't support encrypted archives yet",
+            path.display()
+        );
+    }
     let decoder = codec::Decoder::new(in_file, header.algorithm)?;
 
     match header.entry_type {

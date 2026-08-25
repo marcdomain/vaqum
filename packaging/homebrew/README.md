@@ -1,6 +1,6 @@
 # vaqum Homebrew tap
 
-Homebrew tap for [vaqum](https://github.com/marcdomain/vaqum) — Losslessly compress files faster and smaller than zip/gzip, decompress them, diff (displayed on editor or HTML report), search and find duplicates, and securely shred them — from the command line.
+Homebrew tap for [vaqum](https://github.com/marcdomain/vaqum) — Losslessly compress files faster and smaller than zip/gzip (optionally encrypted), decompress them, diff (displayed on editor or HTML report), search and find duplicates, and securely shred them — from the command line.
 
 ![vaqum demo](https://raw.githubusercontent.com/marcdomain/vaqum/main/demo.gif)
 
@@ -16,8 +16,8 @@ Or in one line: `brew install marcdomain/vaqum/vaqum`.
 ## Usage
 
 ```sh
-vaqum compress <path> [-o out] [-l 1-22] [--max] [-r] [--dedup] [-v]
-vaqum decompress <path.vaqum> [-o dir] [--verify]
+vaqum compress <path> [-o out] [-l 1-22] [--max] [-r] [--dedup] [-v] [-e] [--key-file <f>]
+vaqum decompress <path.vaqum> [-o dir] [--verify] [--key-file <f>] [--max-ratio <n>] [--force]
 vaqum diff <a> <b> [--html report.html] [--open] [--editor]
 vaqum dedupe <dir> [--link]
 vaqum search <pattern> [path] [-i] [-E]

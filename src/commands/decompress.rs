@@ -5,8 +5,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::bomb;
 use crate::cli::DecompressArgs;
 use crate::codec;
+use crate::crypto;
 use crate::dedup;
 use crate::format::{EntryType, HashingWriter, Header};
 use crate::util::{hex_encode, human_bytes};
@@ -14,8 +16,26 @@ use crate::util::{hex_encode, human_bytes};
 pub fn run(args: DecompressArgs) -> Result<()> {
     let mut in_file = File::open(&args.path)
         .with_context(|| format!("failed to open {}", args.path.display()))?;
+    let total_size = in_file.metadata()?.len();
     let header = Header::read(&mut in_file)?;
-    let decoder = codec::Decoder::new(in_file, header.algorithm)?;
+    let compressed_size = total_size.saturating_sub(header.on_disk_len());
+
+    let dest_dir = bomb_check_dir(&header, &args)?;
+    bomb::check(
+        header.original_size,
+        compressed_size,
+        &dest_dir,
+        args.max_ratio,
+        args.force,
+    )?;
+
+    let key = header
+        .encrypted
+        .then(|| resolve_decrypt_key(&args, &header))
+        .transpose()?;
+    let key_ref = key.as_ref().map(|k| (k, &header.nonce_prefix));
+    let decrypt_reader = crypto::DecryptReader::new(in_file, key_ref);
+    let decoder = codec::Decoder::new(decrypt_reader, header.algorithm)?;
 
     match header.entry_type {
         EntryType::File => decompress_file(decoder, &header, &args)?,
@@ -23,6 +43,31 @@ pub fn run(args: DecompressArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_decrypt_key(args: &DecompressArgs, header: &Header) -> Result<crypto::Key> {
+    let key_material = match &args.key_file {
+        Some(path) => {
+            fs::read(path).with_context(|| format!("failed to read key file {}", path.display()))?
+        }
+        None => crypto::prompt_existing_password()?.into_bytes(),
+    };
+    crypto::derive_key(&key_material, &header.salt)
+}
+
+/// A directory that exists (or has an existing ancestor) to check available
+/// disk space against, before any output is actually written.
+fn bomb_check_dir(header: &Header, args: &DecompressArgs) -> Result<PathBuf> {
+    match header.entry_type {
+        EntryType::File => {
+            let dest_path = resolve_file_output(&args.output, &header.name)?;
+            Ok(dest_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(".")))
+        }
+        EntryType::Archive => Ok(args.output.clone().unwrap_or(env::current_dir()?)),
+    }
 }
 
 fn decompress_file<R: io::Read>(

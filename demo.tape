@@ -106,7 +106,27 @@ Enter
 Sleep 2500ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 9. SHRED — safety prompt, then confirmed destruction
+# 9. COMPRESS -e — password-encrypted archive, then DECOMPRESS with it
+# ══════════════════════════════════════════════════════════════════════════════
+Type "vaqum compress secret.txt -e -o secret.vaqum"
+Enter
+Sleep 500ms
+Type "hunter2"
+Enter
+Sleep 300ms
+Type "hunter2"
+Enter
+Sleep 2500ms
+
+Type "vaqum decompress secret.vaqum -o restored-secret.txt"
+Enter
+Sleep 500ms
+Type "hunter2"
+Enter
+Sleep 2000ms
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 10. SHRED — safety prompt, then confirmed destruction
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum shred secret.txt"
 Enter

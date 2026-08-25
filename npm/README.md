@@ -1,6 +1,6 @@
 # vaqum
 
-Losslessly compress files 5x faster and 12% smaller output than zip/gzip at defaults, decompress them, diff (displayed on editor or HTML report), search and find duplicates, and securely shred them — from the command line.
+Losslessly compress files 5x faster and 12% smaller output than zip/gzip at defaults (optionally encrypted), decompress them, diff (displayed on editor or HTML report), search and find duplicates, and securely shred them — from the command line.
 
 ## Install
 
@@ -18,8 +18,8 @@ checksum, and installs it as the `vaqum` command.
 ## Usage
 
 ```sh
-vaqum compress <path> [-o out] [-l 1-22] [--max] [-r] [--dedup] [-v]
-vaqum decompress <path.vaqum> [-o dir] [--verify]
+vaqum compress <path> [-o out] [-l 1-22] [--max] [-r] [--dedup] [-v] [-e] [--key-file <f>]
+vaqum decompress <path.vaqum> [-o dir] [--verify] [--key-file <f>] [--max-ratio <n>] [--force]
 vaqum diff <a> <b> [--html report.html] [--open] [--editor]
 vaqum dedupe <dir> [--link]
 vaqum search <pattern> [path] [-i] [-E]

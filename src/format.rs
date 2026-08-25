@@ -3,33 +3,41 @@
 //! Layout (all integers little-endian):
 //! ```text
 //! magic          4 bytes   b"VAQM"
-//! version        1 byte    format version (currently 1)
+//! version        1 byte    format version (currently 2)
 //! entry_type     1 byte    0 = single file, 1 = directory archive (tar)
 //! algorithm      1 byte    0 = zstd, 1 = xz/LZMA
-//! flags          1 byte    bit 0 = dedup enabled
+//! flags          1 byte    bit 0 = dedup enabled, bit 1 = encrypted
 //! original_size  8 bytes   uncompressed size of the payload (file bytes, or
 //!                          tar-stream bytes for a directory archive)
 //! checksum       32 bytes  SHA-256 of the uncompressed payload
+//! salt           16 bytes  Argon2id salt (zero if not encrypted)
+//! nonce_prefix   7 bytes   ChaCha20-Poly1305 stream nonce prefix (zero if
+//!                          not encrypted)
 //! name_len       2 bytes   length in bytes of `name`
 //! name           N bytes   UTF-8 original file/directory name
 //! ---
-//! compressed payload, to end of file
+//! payload, to end of file (compressed, then encrypted if flagged)
 //! ```
 //!
-//! The fixed-size header is intentionally readable without touching the
-//! compressed payload, so `vaqum info` can report stats cheaply.
+//! `compressed_size` isn't stored: it's `total file size - header.on_disk_len()`.
+//! v1 files aren't readable by this build; `Header::read` bails with an
+//! upgrade message rather than misreading them.
 
 use std::io::{self, Read, Write};
 
 use anyhow::{Context, Result, bail};
 
 pub const MAGIC: &[u8; 4] = b"VAQM";
-pub const VERSION: u8 = 1;
+pub const VERSION: u8 = 2;
 
 pub const FLAG_DEDUP: u8 = 0b0000_0001;
+pub const FLAG_ENCRYPTED: u8 = 0b0000_0010;
+
+const SALT_LEN: usize = crate::crypto::SALT_LEN;
+const NONCE_PREFIX_LEN: usize = crate::crypto::NONCE_PREFIX_LEN;
 
 /// Fixed-size portion of the header, before the variable-length name.
-const FIXED_LEN: usize = 4 + 1 + 1 + 1 + 1 + 8 + 32 + 2;
+const FIXED_LEN: usize = 4 + 1 + 1 + 1 + 1 + 8 + 32 + SALT_LEN + NONCE_PREFIX_LEN + 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryType {
@@ -89,8 +97,11 @@ pub struct Header {
     pub entry_type: EntryType,
     pub algorithm: Algorithm,
     pub dedup: bool,
+    pub encrypted: bool,
     pub original_size: u64,
     pub checksum: [u8; 32],
+    pub salt: [u8; SALT_LEN],
+    pub nonce_prefix: [u8; NONCE_PREFIX_LEN],
     pub name: String,
 }
 
@@ -100,10 +111,15 @@ impl Header {
         w.write_all(&[VERSION])?;
         w.write_all(&[self.entry_type.to_byte()])?;
         w.write_all(&[self.algorithm.to_byte()])?;
-        let flags = if self.dedup { FLAG_DEDUP } else { 0 };
+        let mut flags = if self.dedup { FLAG_DEDUP } else { 0 };
+        if self.encrypted {
+            flags |= FLAG_ENCRYPTED;
+        }
         w.write_all(&[flags])?;
         w.write_all(&self.original_size.to_le_bytes())?;
         w.write_all(&self.checksum)?;
+        w.write_all(&self.salt)?;
+        w.write_all(&self.nonce_prefix)?;
         let name_bytes = self.name.as_bytes();
         if name_bytes.len() > u16::MAX as usize {
             bail!("file name too long to store in vaqum header");
@@ -124,13 +140,14 @@ impl Header {
         let version = fixed[4];
         if version != VERSION {
             bail!(
-                "unsupported vaqum format version {version} (this build supports version {VERSION})"
+                "unsupported vaqum format version {version} (this build supports version {VERSION}); re-compress the file with this version of vaqum"
             );
         }
         let entry_type = EntryType::from_byte(fixed[5])?;
         let algorithm = Algorithm::from_byte(fixed[6])?;
         let flags = fixed[7];
         let dedup = flags & FLAG_DEDUP != 0;
+        let encrypted = flags & FLAG_ENCRYPTED != 0;
 
         let mut original_size_bytes = [0u8; 8];
         original_size_bytes.copy_from_slice(&fixed[8..16]);
@@ -139,8 +156,14 @@ impl Header {
         let mut checksum = [0u8; 32];
         checksum.copy_from_slice(&fixed[16..48]);
 
+        let mut salt = [0u8; SALT_LEN];
+        salt.copy_from_slice(&fixed[48..48 + SALT_LEN]);
+        let mut nonce_prefix = [0u8; NONCE_PREFIX_LEN];
+        nonce_prefix.copy_from_slice(&fixed[48 + SALT_LEN..48 + SALT_LEN + NONCE_PREFIX_LEN]);
+
+        let name_len_offset = 48 + SALT_LEN + NONCE_PREFIX_LEN;
         let mut name_len_bytes = [0u8; 2];
-        name_len_bytes.copy_from_slice(&fixed[48..50]);
+        name_len_bytes.copy_from_slice(&fixed[name_len_offset..name_len_offset + 2]);
         let name_len = u16::from_le_bytes(name_len_bytes) as usize;
 
         let mut name_buf = vec![0u8; name_len];
@@ -152,8 +175,11 @@ impl Header {
             entry_type,
             algorithm,
             dedup,
+            encrypted,
             original_size,
             checksum,
+            salt,
+            nonce_prefix,
             name,
         })
     }
