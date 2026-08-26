@@ -296,6 +296,17 @@ fn resolve_vaqum(path: &Path) -> Result<Resolved> {
                 _temp: Some(temp),
             })
         }
+        EntryType::Bundle => {
+            let temp = TempDir::new().context("failed to create a temp directory")?;
+            let staging_dir = temp.path().join(".vaqum-diff-staging");
+            let target_dir = temp.path().join("bundle");
+            dedup::unpack_tar(decoder, header.dedup, &staging_dir, &target_dir)?;
+            Ok(Resolved::Dir {
+                name: header.name,
+                root: target_dir,
+                _temp: Some(temp),
+            })
+        }
     }
 }
 

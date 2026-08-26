@@ -39,7 +39,15 @@ pub fn run(args: DecompressArgs) -> Result<()> {
 
     match header.entry_type {
         EntryType::File => decompress_file(decoder, &header, &args)?,
-        EntryType::Archive => decompress_archive(decoder, &header, &args)?,
+        EntryType::Archive => {
+            let output_base = args.output.clone().unwrap_or(env::current_dir()?);
+            let target_dir = output_base.join(&header.name);
+            decompress_tar(decoder, &header, &args, &target_dir)?;
+        }
+        EntryType::Bundle => {
+            let output_base = args.output.clone().unwrap_or(env::current_dir()?);
+            decompress_tar(decoder, &header, &args, &output_base)?;
+        }
     }
 
     Ok(())
@@ -66,7 +74,9 @@ fn bomb_check_dir(header: &Header, args: &DecompressArgs) -> Result<PathBuf> {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from(".")))
         }
-        EntryType::Archive => Ok(args.output.clone().unwrap_or(env::current_dir()?)),
+        EntryType::Archive | EntryType::Bundle => {
+            Ok(args.output.clone().unwrap_or(env::current_dir()?))
+        }
     }
 }
 
@@ -102,22 +112,23 @@ fn decompress_file<R: io::Read>(
     Ok(())
 }
 
-fn decompress_archive<R: io::Read>(
+fn decompress_tar<R: io::Read>(
     mut decoder: codec::Decoder<R>,
     header: &Header,
     args: &DecompressArgs,
+    target_dir: &Path,
 ) -> Result<()> {
-    let output_base = args.output.clone().unwrap_or(env::current_dir()?);
-    fs::create_dir_all(&output_base)
-        .with_context(|| format!("failed to create {}", output_base.display()))?;
-    let target_dir = output_base.join(&header.name);
+    if let Some(parent) = target_dir.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
 
     // Streaming, no verify/dedup: unpack straight from the decoder.
     if !args.verify && !header.dedup {
-        fs::create_dir_all(&target_dir)
+        fs::create_dir_all(target_dir)
             .with_context(|| format!("failed to create {}", target_dir.display()))?;
         tar::Archive::new(&mut decoder)
-            .unpack(&target_dir)
+            .unpack(target_dir)
             .with_context(|| format!("failed to unpack archive into {}", target_dir.display()))?;
         println!("✔ Decompressed -> {}", target_dir.display());
         return Ok(());
@@ -126,7 +137,7 @@ fn decompress_archive<R: io::Read>(
     // Otherwise materialize the decompressed tar stream to a temp file
     // first, either to checksum it, to unpack it into a dedup staging
     // area, or both.
-    let tmp_tar_path = sibling_temp_path(&target_dir);
+    let tmp_tar_path = sibling_temp_path(target_dir);
     let materialize_result = (|| -> Result<()> {
         let tmp_file = File::create(&tmp_tar_path)
             .with_context(|| format!("failed to create {}", tmp_tar_path.display()))?;
@@ -150,8 +161,8 @@ fn decompress_archive<R: io::Read>(
     let unpack_result = (|| -> Result<()> {
         let tar_file = File::open(&tmp_tar_path)
             .with_context(|| format!("failed to reopen {}", tmp_tar_path.display()))?;
-        let staging_dir = sibling_staging_path(&target_dir);
-        dedup::unpack_tar(tar_file, header.dedup, &staging_dir, &target_dir)
+        let staging_dir = sibling_staging_path(target_dir);
+        dedup::unpack_tar(tar_file, header.dedup, &staging_dir, target_dir)
     })();
     let _ = fs::remove_file(&tmp_tar_path);
     unpack_result?;

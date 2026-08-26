@@ -228,6 +228,174 @@ fn compress_decompress_directory_with_dedup_round_trips_and_shrinks() {
     assert_trees_equal(&src, &out_dir.join("src_tree"));
 }
 
+// ---------------------------------------------------------------------
+// compress / decompress: multiple paths bundled into one archive
+// ---------------------------------------------------------------------
+
+#[test]
+fn compress_multiple_files_bundles_without_requiring_recursive() {
+    let dir = TempDir::new().unwrap();
+    let a = dir.path().join("a.txt");
+    let b = dir.path().join("b.txt");
+    write_sample_text(&a, 50);
+    write_sample_text(&b, 30);
+
+    let archive = dir.path().join("bundle.vaqum");
+    vaqum()
+        .args([
+            "compress",
+            a.to_str().unwrap(),
+            b.to_str().unwrap(),
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    vaqum()
+        .args(["info", archive.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("multi-path bundle"));
+
+    let out_dir = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+            "--verify",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read(&a).unwrap(),
+        fs::read(out_dir.join("a.txt")).unwrap()
+    );
+    assert_eq!(
+        fs::read(&b).unwrap(),
+        fs::read(out_dir.join("b.txt")).unwrap()
+    );
+}
+
+#[test]
+fn compress_mixed_files_and_directory_requires_recursive_and_round_trips() {
+    let dir = TempDir::new().unwrap();
+    let a = dir.path().join("a.txt");
+    write_sample_text(&a, 20);
+    let src = dir.path().join("src_tree");
+    build_sample_tree(&src);
+
+    let archive = dir.path().join("mixed.vaqum");
+
+    // A directory among the inputs still requires -r, same as a single
+    // directory would.
+    vaqum()
+        .args([
+            "compress",
+            a.to_str().unwrap(),
+            src.to_str().unwrap(),
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--recursive"));
+
+    vaqum()
+        .args([
+            "compress",
+            a.to_str().unwrap(),
+            src.to_str().unwrap(),
+            "-r",
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let out_dir = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+            "--verify",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read(&a).unwrap(),
+        fs::read(out_dir.join("a.txt")).unwrap()
+    );
+    assert_trees_equal(&src, &out_dir.join("src_tree"));
+}
+
+#[test]
+fn compress_multiple_paths_without_output_fails() {
+    let dir = TempDir::new().unwrap();
+    let a = dir.path().join("a.txt");
+    let b = dir.path().join("b.txt");
+    write_sample_text(&a, 5);
+    write_sample_text(&b, 5);
+
+    vaqum()
+        .args(["compress", a.to_str().unwrap(), b.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("-o/--output"));
+}
+
+#[test]
+fn compress_multiple_paths_with_clashing_basenames_fails() {
+    let dir = TempDir::new().unwrap();
+    let dir_a = dir.path().join("dir_a");
+    let dir_b = dir.path().join("dir_b");
+    fs::create_dir_all(&dir_a).unwrap();
+    fs::create_dir_all(&dir_b).unwrap();
+    write_sample_text(&dir_a.join("same.txt"), 5);
+    write_sample_text(&dir_b.join("same.txt"), 5);
+
+    vaqum()
+        .args([
+            "compress",
+            dir_a.join("same.txt").to_str().unwrap(),
+            dir_b.join("same.txt").to_str().unwrap(),
+            "-o",
+            dir.path().join("out.vaqum").to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("share the name"));
+}
+
+#[test]
+fn compress_multiple_paths_rejects_dedup() {
+    let dir = TempDir::new().unwrap();
+    let a = dir.path().join("a.txt");
+    let src = dir.path().join("src_tree");
+    write_sample_text(&a, 5);
+    build_sample_tree(&src);
+
+    vaqum()
+        .args([
+            "compress",
+            a.to_str().unwrap(),
+            src.to_str().unwrap(),
+            "-r",
+            "--dedup",
+            "-o",
+            dir.path().join("out.vaqum").to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--dedup"));
+}
+
 fn assert_trees_equal(a: &std::path::Path, b: &std::path::Path) {
     let mut a_files: Vec<_> = walk_relative(a);
     let mut b_files: Vec<_> = walk_relative(b);

@@ -17,7 +17,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Compress a file or directory into a .vaqum archive
+    /// Compress one or more files/directories into a .vaqum archive
     Compress(CompressArgs),
     /// Decompress a .vaqum archive
     Decompress(DecompressArgs),
@@ -36,10 +36,12 @@ pub enum Command {
 
 #[derive(Parser)]
 pub struct CompressArgs {
-    /// File or directory to compress
-    pub path: PathBuf,
+    /// File(s) and/or directory(-ies) to compress into one archive
+    #[arg(required = true, num_args = 1..)]
+    pub paths: Vec<PathBuf>,
 
-    /// Output path (default: <input>.vaqum)
+    /// Output path (default: <input>.vaqum; required when compressing
+    /// more than one path)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 

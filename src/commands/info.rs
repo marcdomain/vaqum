@@ -19,6 +19,7 @@ pub fn run(args: InfoArgs) -> Result<()> {
         match header.entry_type {
             EntryType::File => "single file",
             EntryType::Archive => "directory archive",
+            EntryType::Bundle => "multi-path bundle",
         }
     );
     println!("  name:         {}", header.name);

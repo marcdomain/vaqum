@@ -59,7 +59,18 @@ Enter
 Sleep 2500ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4. COMPRESS a directory with --dedup, then DEDUPE and --link
+# 4. COMPRESS multiple paths at once into one bundle
+# ══════════════════════════════════════════════════════════════════════════════
+Type "vaqum compress report.txt notes-v1.txt notes-v2.txt -o bundle.vaqum"
+Enter
+Sleep 2500ms
+
+Type "vaqum info bundle.vaqum"
+Enter
+Sleep 2500ms
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 5. COMPRESS a directory with --dedup, then DEDUPE and --link
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum compress photos -r --dedup -v"
 Enter
@@ -74,28 +85,28 @@ Enter
 Sleep 2000ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. DIFF — two files, unified diff in the terminal
+# 6. DIFF — two files, unified diff in the terminal
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum diff notes-v1.txt notes-v2.txt"
 Enter
 Sleep 3s
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 6. DIFF — two directories (added/removed/modified summary)
+# 7. DIFF — two directories (added/removed/modified summary)
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum diff project-backup project -v"
 Enter
 Sleep 3500ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 7. DIFF --html — self-contained side-by-side report
+# 8. DIFF --html — self-contained side-by-side report
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum diff notes-v1.txt notes-v2.txt --html notes.diff.html"
 Enter
 Sleep 2500ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 8. SEARCH — by name and content together, then a regex/content-only pass
+# 9. SEARCH — by name and content together, then a regex/content-only pass
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum search TODO app"
 Enter
@@ -106,7 +117,7 @@ Enter
 Sleep 2500ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 9. COMPRESS -e — password-encrypted archive, then DECOMPRESS with it
+# 10. COMPRESS -e — password-encrypted archive, then DECOMPRESS with it
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum compress secret.txt -e -o secret.vaqum"
 Enter
@@ -126,7 +137,7 @@ Enter
 Sleep 2000ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 10. SHRED — safety prompt, then confirmed destruction
+# 11. SHRED — safety prompt, then confirmed destruction
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum shred secret.txt"
 Enter

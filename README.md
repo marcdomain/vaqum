@@ -22,7 +22,7 @@ The Homebrew tap + install can also be done in one line:
 ## Usage
 
 ```sh
-vaqum compress <path> [-o out] [-l 1-22] [--max] [-t threads] [-r] [--dedup] [--dry-run] [-v] [-e] [--key-file <f>]
+vaqum compress <path>... [-o out] [-l 1-22] [--max] [-t threads] [-r] [--dedup] [--dry-run] [-v] [-e] [--key-file <f>]
 vaqum decompress <path.vaqum> [-o dir] [-v] [--verify] [--key-file <f>] [--max-ratio <n>] [--force]
 vaqum diff <a> <b> [--html report.html] [--open] [-e|--editor] [-v]   # files, dirs, or .vaqum archives, any mix
 vaqum dedupe <dir> [--link] [--dry-run] [-t threads] [-v]             # find (and optionally hardlink) duplicate files
@@ -31,6 +31,8 @@ vaqum info <path.vaqum>
 ```
 
 Run `vaqum <command> --help` for full flag documentation.
+
+`compress` accepts more than one file/directory at once, bundling them into a single archive; `-o` is then required to name it, e.g. `vaqum compress a.txt notes/ -r -o bundle.vaqum`.
 
 `diff` has three stackable output modes:
 

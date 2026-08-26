@@ -43,6 +43,9 @@ const FIXED_LEN: usize = 4 + 1 + 1 + 1 + 1 + 8 + 32 + SALT_LEN + NONCE_PREFIX_LE
 pub enum EntryType {
     File,
     Archive,
+    /// Multiple top-level paths bundled together; unpacks directly into
+    /// the output directory instead of nesting under `name`.
+    Bundle,
 }
 
 impl EntryType {
@@ -50,6 +53,7 @@ impl EntryType {
         match self {
             EntryType::File => 0,
             EntryType::Archive => 1,
+            EntryType::Bundle => 2,
         }
     }
 
@@ -57,6 +61,7 @@ impl EntryType {
         match b {
             0 => Ok(EntryType::File),
             1 => Ok(EntryType::Archive),
+            2 => Ok(EntryType::Bundle),
             other => bail!("unsupported vaqum entry type byte: {other}"),
         }
     }
