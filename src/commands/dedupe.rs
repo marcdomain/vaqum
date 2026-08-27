@@ -23,7 +23,7 @@ pub fn run(args: DedupeArgs) -> Result<()> {
             .unwrap_or(1)
     });
 
-    let (_, files) = hash_tree(&args.path, threads)?;
+    let (_, files) = hash_tree(&args.path, threads, None)?;
 
     let mut groups: HashMap<[u8; 32], Vec<&TreeFile>> = HashMap::new();
     for file in &files {

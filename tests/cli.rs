@@ -396,6 +396,163 @@ fn compress_multiple_paths_rejects_dedup() {
         .stderr(predicate::str::contains("--dedup"));
 }
 
+// ---------------------------------------------------------------------
+// compress --exclude / .vaqumignore
+// ---------------------------------------------------------------------
+
+fn build_excludable_tree(root: &std::path::Path) {
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+    write_sample_text(&root.join("src/main.rs"), 5);
+    write_sample_text(&root.join("node_modules/pkg/index.js"), 5);
+    write_sample_text(&root.join("debug.log"), 5);
+    write_sample_text(&root.join("README.md"), 5);
+}
+
+#[test]
+fn compress_exclude_flag_skips_matching_dir_and_file_pattern() {
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("proj");
+    build_excludable_tree(&src);
+
+    let archive = dir.path().join("out.vaqum");
+    vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "--exclude",
+            "node_modules/",
+            "--exclude",
+            "*.log",
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let out_dir = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let mut files = walk_relative(&out_dir.join("proj"));
+    files.sort();
+    assert_eq!(
+        files,
+        vec!["README.md".to_string(), "src/main.rs".to_string()]
+    );
+}
+
+#[test]
+fn compress_vaqumignore_file_is_auto_discovered() {
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("proj");
+    build_excludable_tree(&src);
+    fs::write(src.join(".vaqumignore"), "node_modules/\n*.log\n").unwrap();
+
+    let archive = dir.path().join("out.vaqum");
+    vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let out_dir = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let mut files = walk_relative(&out_dir.join("proj"));
+    files.sort();
+    assert_eq!(
+        files,
+        vec![
+            ".vaqumignore".to_string(),
+            "README.md".to_string(),
+            "src/main.rs".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn compress_exclude_directory_pattern_does_not_match_a_same_named_file() {
+    // "target/" (trailing slash) should exclude the *directory* named
+    // "target" (and everything under it) but leave a plain file that
+    // happens to share the name alone, elsewhere in the tree.
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("proj");
+    fs::create_dir_all(src.join("build/target")).unwrap();
+    write_sample_text(&src.join("build/target/output.bin"), 5);
+    fs::create_dir_all(src.join("docs")).unwrap();
+    write_sample_text(&src.join("docs/target"), 5);
+
+    let archive = dir.path().join("out.vaqum");
+    vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "--exclude",
+            "target/",
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let out_dir = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let files = walk_relative(&out_dir.join("proj"));
+    assert_eq!(files, vec!["docs/target".to_string()]);
+}
+
+#[test]
+fn compress_trailing_slash_on_input_path_is_normalized() {
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("proj");
+    build_excludable_tree(&src);
+
+    let mut src_with_slash = src.to_str().unwrap().to_string();
+    src_with_slash.push('/');
+
+    // No -o given: the default output name must be "proj.vaqum", not
+    // corrupted into "proj/.vaqum" by the trailing slash.
+    vaqum()
+        .current_dir(dir.path())
+        .args(["compress", &src_with_slash, "-r"])
+        .assert()
+        .success();
+
+    assert!(dir.path().join("proj.vaqum").exists());
+}
+
 fn assert_trees_equal(a: &std::path::Path, b: &std::path::Path) {
     let mut a_files: Vec<_> = walk_relative(a);
     let mut b_files: Vec<_> = walk_relative(b);
@@ -478,6 +635,48 @@ fn info_reports_algorithm_and_sizes() {
         .stdout(predicate::str::contains("zstd"))
         .stdout(predicate::str::contains("single file"))
         .stdout(predicate::str::contains("checksum:"));
+}
+
+#[test]
+fn info_on_a_plain_file_shows_size_and_checksum() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("plain.txt");
+    fs::write(&input, b"hello world").unwrap();
+
+    vaqum()
+        .args(["info", input.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("type:         file"))
+        .stdout(predicate::str::contains("11 B"))
+        .stdout(predicate::str::contains("checksum:     sha256:"))
+        .stdout(predicate::str::contains("modified:"));
+}
+
+#[test]
+fn info_on_a_directory_shows_file_and_dir_counts() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("mydir");
+    fs::create_dir_all(root.join("sub")).unwrap();
+    fs::write(root.join("a.txt"), b"aa").unwrap();
+    fs::write(root.join("sub/b.txt"), b"bb").unwrap();
+
+    vaqum()
+        .args(["info", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("type:         directory"))
+        .stdout(predicate::str::contains("files:        2"))
+        .stdout(predicate::str::contains("directories:  1"))
+        .stdout(predicate::str::contains("modified:"));
+}
+
+#[test]
+fn info_on_a_missing_path_fails() {
+    vaqum()
+        .args(["info", "/no/such/path/at/all"])
+        .assert()
+        .failure();
 }
 
 // ---------------------------------------------------------------------
@@ -847,6 +1046,80 @@ fn diff_editor_on_vaqum_archive_uses_a_scratch_copy() {
     // file elsewhere.
     assert!(!log_contents.contains(archive.to_str().unwrap()));
     assert!(log_contents.contains(changed.to_str().unwrap()));
+}
+
+// ---------------------------------------------------------------------
+// completions
+// ---------------------------------------------------------------------
+
+#[test]
+fn completions_prints_a_nonempty_script_for_each_supported_shell() {
+    for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+        vaqum()
+            .args(["completions", shell])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("vaqum"))
+            .stdout(predicate::str::contains("compress"));
+    }
+}
+
+#[test]
+fn completions_rejects_an_unsupported_shell() {
+    vaqum().args(["completions", "cobol"]).assert().failure();
+}
+
+#[test]
+fn completions_requires_a_shell_without_install() {
+    vaqum().args(["completions"]).assert().failure();
+}
+
+#[test]
+fn completions_install_writes_to_the_shell_specific_path() {
+    let home = TempDir::new().unwrap();
+
+    vaqum()
+        .args(["completions", "zsh", "--install"])
+        .env("HOME", home.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Installed zsh completions"));
+
+    let installed = home.path().join(".zfunc/_vaqum");
+    assert!(installed.exists());
+    assert!(fs::read_to_string(&installed).unwrap().contains("vaqum"));
+}
+
+#[test]
+fn completions_install_auto_detects_shell_from_env() {
+    let home = TempDir::new().unwrap();
+
+    vaqum()
+        .args(["completions", "--install"])
+        .env("HOME", home.path())
+        .env("SHELL", "/bin/bash")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Installed bash completions"));
+
+    assert!(
+        home.path()
+            .join(".local/share/bash-completion/completions/vaqum")
+            .exists()
+    );
+}
+
+#[test]
+fn completions_install_rejects_an_undetectable_shell() {
+    let home = TempDir::new().unwrap();
+
+    vaqum()
+        .args(["completions", "--install"])
+        .env("HOME", home.path())
+        .env("SHELL", "/bin/tcsh")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--install zsh"));
 }
 
 // ---------------------------------------------------------------------

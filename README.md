@@ -22,17 +22,24 @@ The Homebrew tap + install can also be done in one line:
 ## Usage
 
 ```sh
-vaqum compress <path>... [-o out] [-l 1-22] [--max] [-t threads] [-r] [--dedup] [--dry-run] [-v] [-e] [--key-file <f>]
+vaqum compress <path>... [-o out] [-l 1-22] [--max] [-t threads] [-r] [--dedup] [--exclude <pattern>] [--dry-run] [-v] [-e] [--key-file <f>]
 vaqum decompress <path.vaqum> [-o dir] [-v] [--verify] [--key-file <f>] [--max-ratio <n>] [--force]
 vaqum diff <a> <b> [--html report.html] [--open] [-e|--editor] [-v]   # files, dirs, or .vaqum archives, any mix
 vaqum dedupe <dir> [--link] [--dry-run] [-t threads] [-v]             # find (and optionally hardlink) duplicate files
 vaqum shred <path> [-r] [-p passes] [-y] [--dry-run]
-vaqum info <path.vaqum>
+vaqum info <path>
+vaqum completions <bash|zsh|fish|powershell|elvish> [--install]
 ```
 
 Run `vaqum <command> --help` for full flag documentation.
 
+`info` inspects a `.vaqum` archive (detected by content, not extension) and shows its compression stats; given a plain file or directory instead, it shows size, checksum (files only), and created/modified timestamps.
+
+`completions` prints a shell completion script to stdout; `--install` writes it straight to that shell's standard user completions directory instead (auto-detected from `$SHELL` if you omit the shell name) and prints any one-line rc-file addition still needed to load it — it never edits your shell config itself.
+
 `compress` accepts more than one file/directory at once, bundling them into a single archive; `-o` is then required to name it, e.g. `vaqum compress a.txt notes/ -r -o bundle.vaqum`.
+
+`--exclude <pattern>` (repeatable) skips matching paths under a compressed directory — end it with `/` to exclude a directory (and everything under it), omit it to exclude a file; a name with no `/` matches at any depth. Also read automatically from a `.vaqumignore` file (same syntax, one pattern per line) at each directory's root.
 
 `diff` has three stackable output modes:
 

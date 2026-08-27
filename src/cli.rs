@@ -23,7 +23,8 @@ pub enum Command {
     Decompress(DecompressArgs),
     /// Securely overwrite and delete a file or directory
     Shred(ShredArgs),
-    /// Show stats about a .vaqum archive without fully decompressing it
+    /// Show stats about a .vaqum archive (without fully decompressing it),
+    /// or about a plain file or directory
     Info(InfoArgs),
     /// Compare two files, directories, or .vaqum archives (any mix)
     Diff(DiffArgs),
@@ -32,6 +33,21 @@ pub enum Command {
     /// Search a file, directory, or subtree for a file name or file content
     /// match
     Search(SearchArgs),
+    /// Print (or install) a shell completion script
+    Completions(CompletionsArgs),
+}
+
+#[derive(Parser)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for (auto-detected from $SHELL with
+    /// --install if omitted)
+    #[arg(required_unless_present = "install")]
+    pub shell: Option<clap_complete::Shell>,
+
+    /// Write the script to this shell's standard user completions
+    /// directory instead of printing it to stdout
+    #[arg(long)]
+    pub install: bool,
 }
 
 #[derive(Parser)]
@@ -64,6 +80,13 @@ pub struct CompressArgs {
     /// Enable deduplication across files in a directory
     #[arg(long)]
     pub dedup: bool,
+
+    /// Skip paths matching this name/pattern when compressing a directory
+    /// (repeatable). End it with `/` to exclude a directory (and its
+    /// contents); without, it excludes a file. Also read from a
+    /// `.vaqumignore` file at each directory's root
+    #[arg(long = "exclude", value_name = "PATTERN")]
+    pub exclude: Vec<String>,
 
     /// Show estimated ratio without writing output
     #[arg(long)]
@@ -143,7 +166,7 @@ pub struct ShredArgs {
 
 #[derive(Parser)]
 pub struct InfoArgs {
-    /// .vaqum file to inspect
+    /// .vaqum archive, plain file, or directory to inspect
     pub path: PathBuf,
 }
 

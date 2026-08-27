@@ -8,6 +8,7 @@ use crate::cli::CompressArgs;
 use crate::codec;
 use crate::crypto;
 use crate::dedup;
+use crate::exclude::ExcludeSet;
 use crate::format::{Algorithm, CountingWriter, EntryType, HashingWriter, Header};
 use crate::util::human_bytes;
 
@@ -19,8 +20,15 @@ struct PayloadStats {
     checksum: [u8; 32],
 }
 
+/// A trailing separator (`node_modules/`) means the same thing as without
+/// one — strip it so path handling downstream never has to special-case it.
+fn normalize_path(path: &Path) -> PathBuf {
+    path.components().collect()
+}
+
 pub fn run(args: CompressArgs) -> Result<()> {
-    let paths = &args.paths;
+    let paths: Vec<PathBuf> = args.paths.iter().map(|p| normalize_path(p)).collect();
+    let paths = &paths;
     for path in paths {
         if !path.exists() {
             bail!("'{}' does not exist", path.display());
@@ -76,6 +84,7 @@ pub fn run(args: CompressArgs) -> Result<()> {
         let stats = build_payload(
             paths,
             args.dedup,
+            &args.exclude,
             algorithm,
             args.level,
             threads,
@@ -120,6 +129,7 @@ pub fn run(args: CompressArgs) -> Result<()> {
         let result = build_payload(
             paths,
             args.dedup,
+            &args.exclude,
             algorithm,
             args.level,
             threads,
@@ -189,6 +199,7 @@ fn write_final_output(output_path: &Path, tmp_path: &Path, header: &Header) -> R
 fn build_payload<W: Write>(
     paths: &[PathBuf],
     dedup_enabled: bool,
+    exclude_patterns: &[String],
     algorithm: Algorithm,
     level: u8,
     threads: usize,
@@ -212,15 +223,22 @@ fn build_payload<W: Write>(
         }
         [single] => {
             let mut builder = tar::Builder::new(hashing);
+            let exclude = ExcludeSet::build(single, exclude_patterns)?;
             if dedup_enabled {
-                dedup::write_dedup_tar(single, threads, &mut builder, |path, size, is_dup| {
-                    if verbose {
-                        let tag = if is_dup { "dup " } else { "new " };
-                        println!("  {tag}{path}  ({})", human_bytes(size));
-                    }
-                })?;
+                dedup::write_dedup_tar(
+                    single,
+                    threads,
+                    Some(&exclude),
+                    &mut builder,
+                    |path, size, is_dup| {
+                        if verbose {
+                            let tag = if is_dup { "dup " } else { "new " };
+                            println!("  {tag}{path}  ({})", human_bytes(size));
+                        }
+                    },
+                )?;
             } else {
-                append_directory_tar(&mut builder, single, "", verbose)?;
+                append_directory_tar(&mut builder, single, "", Some(&exclude), verbose)?;
             }
             builder
                 .into_inner()
@@ -229,7 +247,7 @@ fn build_payload<W: Write>(
         multiple => {
             let mut builder = tar::Builder::new(hashing);
             for path in multiple {
-                append_bundle_entry(&mut builder, path, verbose)?;
+                append_bundle_entry(&mut builder, path, exclude_patterns, verbose)?;
             }
             builder
                 .into_inner()
@@ -258,6 +276,7 @@ fn build_payload<W: Write>(
 fn append_bundle_entry<W: Write>(
     builder: &mut tar::Builder<W>,
     path: &Path,
+    exclude_patterns: &[String],
     verbose: bool,
 ) -> Result<()> {
     let basename = basename_of(path);
@@ -266,7 +285,8 @@ fn append_bundle_entry<W: Write>(
         builder
             .append_dir(&basename, path)
             .with_context(|| format!("failed to archive directory {basename}"))?;
-        append_directory_tar(builder, path, &basename, verbose)
+        let exclude = ExcludeSet::build(path, exclude_patterns)?;
+        append_directory_tar(builder, path, &basename, Some(&exclude), verbose)
     } else {
         let size = path.metadata().map(|m| m.len()).unwrap_or(0);
         builder
@@ -286,9 +306,24 @@ fn append_directory_tar<W: Write>(
     builder: &mut tar::Builder<W>,
     root: &Path,
     prefix: &str,
+    exclude: Option<&ExcludeSet>,
     verbose: bool,
 ) -> Result<()> {
-    for entry in walkdir::WalkDir::new(root).min_depth(1).sort_by_file_name() {
+    let walker = walkdir::WalkDir::new(root)
+        .min_depth(1)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|e| {
+            let rel = e
+                .path()
+                .strip_prefix(root)
+                .expect("walkdir entries are under root");
+            !exclude.is_some_and(|ex| {
+                ex.is_excluded(&crate::util::to_posix_path(rel), e.file_type().is_dir())
+            })
+        });
+
+    for entry in walker {
         let entry = entry.with_context(|| format!("failed to walk {}", root.display()))?;
         let rel = entry
             .path()

@@ -1,11 +1,28 @@
-use anyhow::Result;
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
 
 use crate::cli::InfoArgs;
-use crate::format::{EntryType, read_header_and_total_size};
-use crate::util::{hex_encode, human_bytes};
+use crate::format::{self, EntryType, read_header_and_total_size};
+use crate::util::{format_time, hash_file, hex_encode, human_bytes};
 
 pub fn run(args: InfoArgs) -> Result<()> {
-    let (header, total_size) = read_header_and_total_size(&args.path)?;
+    let path = &args.path;
+    if !path.exists() {
+        bail!("'{}' does not exist", path.display());
+    }
+
+    if path.is_file() && format::is_vaqum_file(path)? {
+        show_vaqum_info(path)
+    } else if path.is_dir() {
+        show_dir_info(path)
+    } else {
+        show_file_info(path)
+    }
+}
+
+fn show_vaqum_info(path: &Path) -> Result<()> {
+    let (header, total_size) = read_header_and_total_size(path)?;
     let compressed_size = total_size.saturating_sub(header.on_disk_len());
     let ratio = if compressed_size > 0 {
         header.original_size as f64 / compressed_size as f64
@@ -13,7 +30,7 @@ pub fn run(args: InfoArgs) -> Result<()> {
         1.0
     };
 
-    println!("{}", args.path.display());
+    println!("{}", path.display());
     println!(
         "  type:         {}",
         match header.entry_type {
@@ -41,5 +58,61 @@ pub fn run(args: InfoArgs) -> Result<()> {
         if header.encrypted { "yes" } else { "no" }
     );
 
+    Ok(())
+}
+
+fn show_file_info(path: &Path) -> Result<()> {
+    let (size, checksum) =
+        hash_file(path).with_context(|| format!("failed to read {}", path.display()))?;
+
+    println!("{}", path.display());
+    println!("  type:         file");
+    println!("  size:         {} ({size} bytes)", human_bytes(size));
+    print_timestamps(path)?;
+    println!("  checksum:     sha256:{}", hex_encode(&checksum));
+
+    Ok(())
+}
+
+fn show_dir_info(path: &Path) -> Result<()> {
+    let mut files = 0u64;
+    let mut dirs = 0u64;
+    let mut total_size = 0u64;
+    for entry in walkdir::WalkDir::new(path).min_depth(1) {
+        let entry = entry.with_context(|| format!("failed to walk {}", path.display()))?;
+        if entry.file_type().is_dir() {
+            dirs += 1;
+        } else if entry.file_type().is_file() {
+            files += 1;
+            total_size += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+
+    println!("{}", path.display());
+    println!("  type:         directory");
+    println!(
+        "  size:         {} ({total_size} bytes)",
+        human_bytes(total_size)
+    );
+    println!("  files:        {files}");
+    println!("  directories:  {dirs}");
+    print_timestamps(path)?;
+
+    Ok(())
+}
+
+/// Prints `created`/`modified` (RFC 3339, UTC) for `path`'s own metadata.
+/// `created` is silently omitted where the platform/filesystem doesn't
+/// track birth time.
+fn print_timestamps(path: &Path) -> Result<()> {
+    let metadata = path
+        .metadata()
+        .with_context(|| format!("failed to stat {}", path.display()))?;
+    if let Ok(created) = metadata.created() {
+        println!("  created:      {}", format_time(created));
+    }
+    if let Ok(modified) = metadata.modified() {
+        println!("  modified:     {}", format_time(modified));
+    }
     Ok(())
 }

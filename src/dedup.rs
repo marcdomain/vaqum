@@ -19,6 +19,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::exclude::ExcludeSet;
 use crate::util::{hash_tree, hex_encode, set_unix_mode};
 
 pub const MANIFEST_ENTRY: &str = ".vaqum-manifest.json";
@@ -49,10 +50,11 @@ pub struct FileEntry {
 pub fn write_dedup_tar<W: Write>(
     root: &Path,
     threads: usize,
+    exclude: Option<&ExcludeSet>,
     builder: &mut tar::Builder<W>,
     mut on_file: impl FnMut(&str, u64, bool),
 ) -> Result<()> {
-    let (dirs, files) = hash_tree(root, threads)?;
+    let (dirs, files) = hash_tree(root, threads, exclude)?;
 
     let mut manifest = Manifest {
         dirs,

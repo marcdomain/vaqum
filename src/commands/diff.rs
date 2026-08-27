@@ -136,7 +136,8 @@ fn open_in_editor(
 /// throwaway scratch copy (decompressed from a `.vaqum` archive) rather
 /// than the user's actual file.
 fn materialize_for_editor(original: &Path, resolved: &Resolved) -> Result<(PathBuf, bool)> {
-    let from_archive = original.is_file() && is_vaqum_file(original).unwrap_or(false);
+    let from_archive =
+        original.is_file() && crate::format::is_vaqum_file(original).unwrap_or(false);
     let path = match resolved {
         Resolved::Dir { root, .. } => root.clone(),
         Resolved::File { bytes, .. } => {
@@ -233,7 +234,7 @@ fn resolve(path: &Path) -> Result<Resolved> {
     if !path.exists() {
         bail!("'{}' does not exist", path.display());
     }
-    if path.is_file() && is_vaqum_file(path)? {
+    if path.is_file() && crate::format::is_vaqum_file(path)? {
         return resolve_vaqum(path);
     }
     if path.is_dir() {
@@ -249,16 +250,6 @@ fn resolve(path: &Path) -> Result<Resolved> {
         name: display_name(path),
         bytes,
     })
-}
-
-fn is_vaqum_file(path: &Path) -> Result<bool> {
-    let mut f = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let mut magic = [0u8; 4];
-    match f.read_exact(&mut magic) {
-        Ok(()) => Ok(&magic == crate::format::MAGIC),
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
-        Err(e) => Err(e.into()),
-    }
 }
 
 fn resolve_vaqum(path: &Path) -> Result<Resolved> {
@@ -349,8 +340,8 @@ impl TreeDiff {
 }
 
 fn compute_tree_diff(root_a: &Path, root_b: &Path, threads: usize) -> Result<TreeDiff> {
-    let (_, files_a) = hash_tree(root_a, threads)?;
-    let (_, files_b) = hash_tree(root_b, threads)?;
+    let (_, files_a) = hash_tree(root_a, threads, None)?;
+    let (_, files_b) = hash_tree(root_b, threads, None)?;
 
     let map_a: std::collections::BTreeMap<&str, &TreeFile> =
         files_a.iter().map(|f| (f.rel_path.as_str(), f)).collect();

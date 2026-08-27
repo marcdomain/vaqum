@@ -4,6 +4,7 @@ mod codec;
 mod commands;
 mod crypto;
 mod dedup;
+mod exclude;
 mod format;
 mod util;
 
@@ -26,6 +27,7 @@ fn main() {
         // the plain success/failure one the other commands use.
         Command::Diff(args) => exit_on_match_result(commands::diff::run(args)),
         Command::Search(args) => exit_on_match_result(commands::search::run(args)),
+        Command::Completions(args) => exit_on_result(commands::completions::run(args)),
     }
 }
 

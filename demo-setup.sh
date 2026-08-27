@@ -36,6 +36,13 @@ printf 'fn main() {\n    println!("v2");\n}\n' > project/src/main.rs
 printf '# My Project\n' > project/README.md
 printf 'pub fn helper() {}\n' > project/src/util.rs
 
+# For `compress --exclude`: its own tree (kept separate from
+# project/project-backup above so it doesn't clutter the diff demo).
+mkdir -p webapp/src webapp/node_modules/left-pad
+printf 'fn main() {}\n' > webapp/src/main.rs
+printf '# webapp\n' > webapp/README.md
+printf 'module.exports = () => {};\n' > webapp/node_modules/left-pad/index.js
+
 # For `search`: a couple of files with TODO markers to find by content,
 # and a TODO-named directory to find by name.
 mkdir -p app/TODO-cleanup

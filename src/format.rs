@@ -204,6 +204,18 @@ pub fn read_header_and_total_size(path: &std::path::Path) -> Result<(Header, u64
     Ok((header, total_size))
 }
 
+/// Detect a `.vaqum` file by its magic bytes, independent of extension.
+pub fn is_vaqum_file(path: &std::path::Path) -> Result<bool> {
+    let mut f =
+        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut magic = [0u8; 4];
+    match f.read_exact(&mut magic) {
+        Ok(()) => Ok(&magic == MAGIC),
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// A `Write` wrapper that transparently hashes (SHA-256) and counts every
 /// byte written through it, before forwarding to the inner writer.
 pub struct HashingWriter<W: Write> {

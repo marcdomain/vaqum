@@ -1,6 +1,6 @@
 [package]
 name = "vaqum"
-version = "1.2.1"
+version = "1.2.2"
 edition = "2024"
 description = "Losslessly compress, decompress, and securely shred files from the command line."
 license = "MIT"
@@ -14,7 +14,9 @@ anyhow = "1.0.104"
 argon2 = "0.5.3"
 chacha20poly1305 = { version = "0.10.1", features = ["stream"] }
 clap = { version = "4.6.6", features = ["derive"] }
+clap_complete = "4.6.9"
 fs2 = "0.4.3"
+globset = "0.4.20"
 humansize = "2.1.3"
 rand = "0.10.2"
 rayon = "1.12.0"
@@ -26,6 +28,7 @@ sha2 = "0.11.0"
 similar = "3.2.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
+time = { version = "0.3.55", features = ["formatting"] }
 walkdir = "2.5.0"
 xz2 = { version = "0.1.7", features = ["static"] }
 zstd = { version = "0.13.3", features = ["zstdmt"] }

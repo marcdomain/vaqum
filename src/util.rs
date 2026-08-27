@@ -7,10 +7,25 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use humansize::{DECIMAL, format_size};
 
+use crate::exclude::ExcludeSet;
+
 /// Pretty-print a byte count the way the CLI examples in the project brief
 /// do (e.g. "2.3 GB").
 pub fn human_bytes(bytes: u64) -> String {
     format_size(bytes, DECIMAL)
+}
+
+/// Format a filesystem timestamp as RFC 3339 in UTC (avoids the local
+/// timezone lookup, which is unsound to call in a multithreaded process on
+/// some Unix platforms).
+pub fn format_time(t: std::time::SystemTime) -> String {
+    use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
+    OffsetDateTime::from(t)
+        .replace_nanosecond(0)
+        .unwrap_or_else(|_| OffsetDateTime::from(t))
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "unknown".to_string())
 }
 
 /// Stream a file and compute its SHA-256 digest and length without loading
@@ -49,14 +64,32 @@ pub struct TreeFile {
 /// stable, name-sorted order.
 ///
 /// Shared by `compress --dedup`, `dedupe`, and `diff`, so a directory only
-/// ever gets walked and hashed one way in this codebase.
+/// ever gets walked and hashed one way in this codebase. `exclude`, when
+/// given, prunes matching entries (and doesn't descend into excluded
+/// directories at all).
 ///
 /// Symlinks and other special files are skipped.
-pub fn hash_tree(root: &Path, threads: usize) -> Result<(Vec<String>, Vec<TreeFile>)> {
+pub fn hash_tree(
+    root: &Path,
+    threads: usize,
+    exclude: Option<&ExcludeSet>,
+) -> Result<(Vec<String>, Vec<TreeFile>)> {
     let mut dirs = Vec::new();
     let mut candidates: Vec<(String, PathBuf, Option<u32>)> = Vec::new();
 
-    for entry in walkdir::WalkDir::new(root).min_depth(1).sort_by_file_name() {
+    let walker = walkdir::WalkDir::new(root)
+        .min_depth(1)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|e| {
+            let rel = e
+                .path()
+                .strip_prefix(root)
+                .expect("walkdir entries are under root");
+            !exclude.is_some_and(|ex| ex.is_excluded(&to_posix_path(rel), e.file_type().is_dir()))
+        });
+
+    for entry in walker {
         let entry = entry.with_context(|| format!("failed to walk {}", root.display()))?;
         let rel = entry
             .path()
