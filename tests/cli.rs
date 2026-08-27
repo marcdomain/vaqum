@@ -596,6 +596,7 @@ fn original_size_from_info(archive: &std::path::Path) -> f64 {
     number * multiplier
 }
 
+/// Relative file paths under `root`, always `/`-separated.
 fn walk_relative(root: &std::path::Path) -> Vec<String> {
     walkdir::WalkDir::new(root)
         .min_depth(1)
@@ -606,8 +607,10 @@ fn walk_relative(root: &std::path::Path) -> Vec<String> {
             e.path()
                 .strip_prefix(root)
                 .unwrap()
-                .to_string_lossy()
-                .into_owned()
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
         })
         .collect()
 }
