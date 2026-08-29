@@ -35,6 +35,24 @@ pub enum Command {
     Search(SearchArgs),
     /// Print (or install) a shell completion script
     Completions(CompletionsArgs),
+    /// Manage persisted defaults and profiles (~/.config/vaqum/config.toml)
+    Config(ConfigArgs),
+}
+
+#[derive(Parser)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub action: ConfigAction,
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Print the resolved config (file merged over built-in defaults)
+    Show,
+    /// Print the config file's location
+    Path,
+    /// Write a starter config file, with everything commented out
+    Init,
 }
 
 #[derive(Parser)]
@@ -61,13 +79,18 @@ pub struct CompressArgs {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
-    /// Compression level, 1-22 (zstd scale)
-    #[arg(short = 'l', long, default_value_t = 9, value_parser = clap::value_parser!(u8).range(1..=22))]
-    pub level: u8,
+    /// Compression level, 1-22 (zstd scale); default 9, unless overridden
+    /// by a config default/profile
+    #[arg(short = 'l', long, value_parser = clap::value_parser!(u8).range(1..=22))]
+    pub level: Option<u8>,
 
     /// Use LZMA/xz max-compression mode instead of zstd (slower, smaller)
     #[arg(long)]
     pub max: bool,
+
+    /// Apply a named profile from the config file (see `vaqum config`)
+    #[arg(long)]
+    pub profile: Option<String>,
 
     /// Number of threads to use (default: all cores)
     #[arg(short, long)]
@@ -104,6 +127,11 @@ pub struct CompressArgs {
     /// instead of a password
     #[arg(long)]
     pub key_file: Option<PathBuf>,
+
+    /// Suppress the progress bar (also auto-suppressed when not attached
+    /// to a terminal, e.g. piped or redirected)
+    #[arg(short, long)]
+    pub quiet: bool,
 }
 
 #[derive(Parser)]
@@ -115,7 +143,7 @@ pub struct DecompressArgs {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
-    /// Show progress
+    /// Show extra output (e.g. the decompressed size)
     #[arg(short, long)]
     pub verbose: bool,
 
@@ -135,6 +163,11 @@ pub struct DecompressArgs {
     /// Bypass the archive bomb ratio/disk-space safety check
     #[arg(long)]
     pub force: bool,
+
+    /// Suppress the progress bar (also auto-suppressed when not attached
+    /// to a terminal, e.g. piped or redirected)
+    #[arg(short, long)]
+    pub quiet: bool,
 }
 
 #[derive(Parser)]
@@ -162,6 +195,11 @@ pub struct ShredArgs {
     /// Show what would be shredded, without doing it
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Suppress the overwrite progress bar (also auto-suppressed when not
+    /// attached to a terminal, e.g. piped or redirected)
+    #[arg(short, long)]
+    pub quiet: bool,
 }
 
 #[derive(Parser)]
@@ -231,6 +269,11 @@ pub struct DedupeArgs {
     /// Number of threads to use for hashing (default: all cores)
     #[arg(short, long)]
     pub threads: Option<usize>,
+
+    /// Suppress the scanning progress bar (also auto-suppressed when not
+    /// attached to a terminal, e.g. piped or redirected)
+    #[arg(short, long)]
+    pub quiet: bool,
 }
 
 #[derive(Parser)]

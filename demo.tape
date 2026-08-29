@@ -16,8 +16,11 @@ Set PlaybackSpeed 1
 # ── Setup: sample files, hidden from the recording ─────────────────────────────
 # (built by demo-setup.sh — kept out of the tape so it isn't fighting VHS's
 # Type-string quoting rules for a multi-line loop)
+# CARGO_BIN is captured before HOME is overridden below, and put ahead of
+# PATH, so the recording runs the freshly built dev binary rather than
+# whatever's on PATH already (e.g. a globally npm-installed release build).
 Hide
-Type "bash demo-setup.sh && cd /tmp/vaqum-demo && export HOME=/tmp/vaqum-demo"
+Type "export CARGO_BIN=$HOME/.cargo/bin && bash demo-setup.sh && cd /tmp/vaqum-demo && export HOME=/tmp/vaqum-demo && export PATH=$CARGO_BIN:$PATH"
 Enter
 Sleep 500ms
 Type "clear"
@@ -100,28 +103,54 @@ Enter
 Sleep 3s
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 7. DIFF — two files, unified diff in the terminal
+# 7. CONFIG — persisted defaults/profiles for compress
+# ══════════════════════════════════════════════════════════════════════════════
+Type "vaqum config show"
+Enter
+Sleep 2500ms
+
+Type "vaqum compress report.txt --profile release -o report-release.vaqum"
+Enter
+Sleep 2500ms
+
+Type "vaqum info report-release.vaqum"
+Enter
+Sleep 2500ms
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 8. DECOMPRESS/INFO — reading foreign zip and tar.gz archives
+# ══════════════════════════════════════════════════════════════════════════════
+Type "vaqum info shared.zip"
+Enter
+Sleep 2500ms
+
+Type "vaqum decompress shared.tar.gz -o shared-restored"
+Enter
+Sleep 2500ms
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 9. DIFF — two files, unified diff in the terminal
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum diff notes-v1.txt notes-v2.txt"
 Enter
 Sleep 3s
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 8. DIFF — two directories (added/removed/modified summary)
+# 10. DIFF — two directories (added/removed/modified summary)
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum diff project-backup project -v"
 Enter
 Sleep 3500ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 9. DIFF --html — self-contained side-by-side report
+# 11. DIFF --html — self-contained side-by-side report
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum diff notes-v1.txt notes-v2.txt --html notes.diff.html"
 Enter
 Sleep 2500ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 10. SEARCH — by name and content together, then a regex/content-only pass
+# 12. SEARCH — by name and content together, then a regex/content-only pass
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum search TODO app"
 Enter
@@ -132,7 +161,7 @@ Enter
 Sleep 2500ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 11. COMPRESS -e — password-encrypted archive, then DECOMPRESS with it
+# 13. COMPRESS -e — password-encrypted archive, then DECOMPRESS with it
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum compress secret.txt -e -o secret.vaqum"
 Enter
@@ -152,14 +181,14 @@ Enter
 Sleep 2000ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 12. COMPLETIONS --install — write a shell completion script into place
+# 14. COMPLETIONS --install — write a shell completion script into place
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum completions zsh --install"
 Enter
 Sleep 2500ms
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 13. SHRED — safety prompt, then confirmed destruction
+# 15. SHRED — safety prompt, then confirmed destruction
 # ══════════════════════════════════════════════════════════════════════════════
 Type "vaqum shred secret.txt"
 Enter

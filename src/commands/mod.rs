@@ -1,5 +1,6 @@
 pub mod completions;
 pub mod compress;
+pub mod config;
 pub mod decompress;
 pub mod dedupe;
 pub mod diff;

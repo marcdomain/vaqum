@@ -340,8 +340,8 @@ impl TreeDiff {
 }
 
 fn compute_tree_diff(root_a: &Path, root_b: &Path, threads: usize) -> Result<TreeDiff> {
-    let (_, files_a) = hash_tree(root_a, threads, None)?;
-    let (_, files_b) = hash_tree(root_b, threads, None)?;
+    let (_, files_a) = hash_tree(root_a, threads, None, None)?;
+    let (_, files_b) = hash_tree(root_b, threads, None, None)?;
 
     let map_a: std::collections::BTreeMap<&str, &TreeFile> =
         files_a.iter().map(|f| (f.rel_path.as_str(), f)).collect();

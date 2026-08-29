@@ -22,18 +22,23 @@ The Homebrew tap + install can also be done in one line:
 ## Usage
 
 ```sh
-vaqum compress <path>... [-o out] [-l 1-22] [--max] [-t threads] [-r] [--dedup] [--exclude <pattern>] [--dry-run] [-v] [-e] [--key-file <f>]
-vaqum decompress <path.vaqum> [-o dir] [-v] [--verify] [--key-file <f>] [--max-ratio <n>] [--force]
+vaqum compress <path>... [-o out] [-l 1-22] [--max] [-t threads] [-r] [--dedup] [--exclude <pattern>] [--profile <name>] [--dry-run] [-v] [-e] [--key-file <f>] [-q]
+vaqum decompress <path.vaqum|.zip|.tar.gz> [-o dir] [-v] [--verify] [--key-file <f>] [--max-ratio <n>] [--force] [-q]
 vaqum diff <a> <b> [--html report.html] [--open] [-e|--editor] [-v]   # files, dirs, or .vaqum archives, any mix
-vaqum dedupe <dir> [--link] [--dry-run] [-t threads] [-v]             # find (and optionally hardlink) duplicate files
-vaqum shred <path> [-r] [-p passes] [-y] [--dry-run]
+vaqum dedupe <dir> [--link] [--dry-run] [-t threads] [-v] [-q]        # find (and optionally hardlink) duplicate files
+vaqum shred <path> [-r] [-p passes] [-y] [--dry-run] [-q]
 vaqum info <path>
 vaqum completions <bash|zsh|fish|powershell|elvish> [--install]
+vaqum config <show|path|init>
 ```
 
 Run `vaqum <command> --help` for full flag documentation.
 
+`config` manages `compress`'s persisted defaults at `~/.config/vaqum/config.toml` (`%APPDATA%\vaqum\config.toml` on Windows): `config init` writes a starter file, `config show` prints what's currently resolved, `config path` prints the file's location. A `[defaults]` block applies to every compress; `[compress]` overrides it for compress specifically; a named `[profile.<name>]` overrides both when selected with `compress --profile <name>`. Command-line flags always win over all three.
+
 `info` inspects a `.vaqum` archive (detected by content, not extension) and shows its compression stats; given a plain file or directory instead, it shows size, checksum (files only), and created/modified timestamps.
+
+`decompress` and `info` also read `.zip` and `.tar.gz`/`.tgz` archives (detected by content), as a convenience so you don't need another tool installed just to open something sent to you. This is one-way: vaqum's own format stays the only supported *output* — there's no `compress --zip` or similar.
 
 `completions` prints a shell completion script to stdout; `--install` writes it straight to that shell's standard user completions directory instead (auto-detected from `$SHELL` if you omit the shell name) and prints any one-line rc-file addition still needed to load it — it never edits your shell config itself.
 
@@ -51,6 +56,8 @@ Run `vaqum <command> --help` for full flag documentation.
 `compress -e` (or `--key-file <f>`) encrypts the output with ChaCha20-Poly1305, keyed by an Argon2id-derived password (or the keyfile's bytes) — the key itself is never stored, only the salt. `decompress` auto-detects encryption and prompts for the password (or takes `--key-file`).
 
 `decompress` also refuses archives that claim an implausible expansion ratio (>1000:1 by default) or would exceed available disk space, to guard against decompression bombs; tune with `--max-ratio` or bypass with `--force`.
+
+A progress bar shows automatically on `compress`, `decompress`, `dedupe`, and `shred` whenever output is an interactive terminal; it's auto-suppressed when piped/redirected, or explicitly with `-q`/`--quiet`.
 
 ## Development
 

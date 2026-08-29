@@ -54,7 +54,7 @@ pub fn write_dedup_tar<W: Write>(
     builder: &mut tar::Builder<W>,
     mut on_file: impl FnMut(&str, u64, bool),
 ) -> Result<()> {
-    let (dirs, files) = hash_tree(root, threads, exclude)?;
+    let (dirs, files) = hash_tree(root, threads, exclude, None)?;
 
     let mut manifest = Manifest {
         dirs,

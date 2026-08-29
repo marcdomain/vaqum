@@ -3,13 +3,24 @@
 
 use std::fs;
 use std::io::Write;
+use std::sync::OnceLock;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+/// Empty, shared config dir so tests never see the real machine's
+/// `~/.config/vaqum`. Config-loading tests override it per-test.
+fn isolated_config_home() -> &'static std::path::Path {
+    static DIR: OnceLock<TempDir> = OnceLock::new();
+    DIR.get_or_init(|| TempDir::new().unwrap()).path()
+}
+
 fn vaqum() -> Command {
-    Command::cargo_bin("vaqum").expect("vaqum binary should build")
+    let mut cmd = Command::cargo_bin("vaqum").expect("vaqum binary should build");
+    cmd.env("XDG_CONFIG_HOME", isolated_config_home());
+    cmd.env("APPDATA", isolated_config_home());
+    cmd
 }
 
 /// Write a moderately large, non-trivially-compressible text file so
@@ -120,6 +131,65 @@ fn dry_run_reports_stats_but_writes_no_output() {
         !dir.path().join("original.txt.vaqum").exists(),
         "--dry-run must not write an output file"
     );
+}
+
+// ---------------------------------------------------------------------
+// progress bar: auto-suppressed when not a terminal, -q/--quiet accepted
+// ---------------------------------------------------------------------
+
+#[test]
+fn compress_and_decompress_progress_bar_is_suppressed_when_piped() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("original.txt");
+    write_sample_text(&input, 500);
+
+    let archive = dir.path().join("original.txt.vaqum");
+    vaqum()
+        .args(["compress", input.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ETA").not())
+        .stderr(predicate::str::contains("ETA").not());
+
+    let out_dir = dir.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ETA").not())
+        .stderr(predicate::str::contains("ETA").not());
+}
+
+#[test]
+fn compress_and_decompress_accept_quiet_flag() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("original.txt");
+    write_sample_text(&input, 500);
+
+    let archive = dir.path().join("original.txt.vaqum");
+    vaqum()
+        .args(["compress", input.to_str().unwrap(), "-q"])
+        .assert()
+        .success();
+
+    let out_dir = dir.path().join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .success();
 }
 
 // ---------------------------------------------------------------------
@@ -759,6 +829,20 @@ fn shred_with_yes_flag_removes_file_without_prompting() {
 }
 
 #[test]
+fn shred_accepts_quiet_flag() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join("secret.txt");
+    fs::write(&target, b"sensitive data").unwrap();
+
+    vaqum()
+        .args(["shred", target.to_str().unwrap(), "-y", "-q"])
+        .assert()
+        .success();
+
+    assert!(!target.exists(), "file should be gone after shredding");
+}
+
+#[test]
 fn shred_aborts_when_confirmation_does_not_match() {
     let dir = TempDir::new().unwrap();
     let target = dir.path().join("secret.txt");
@@ -1130,6 +1214,19 @@ fn completions_install_rejects_an_undetectable_shell() {
 // ---------------------------------------------------------------------
 
 #[test]
+fn dedupe_accepts_quiet_flag() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("photos");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("img1.txt"), "same content\n").unwrap();
+
+    vaqum()
+        .args(["dedupe", root.to_str().unwrap(), "-q"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn dedupe_reports_duplicate_groups_and_reclaimable_space() {
     let dir = TempDir::new().unwrap();
     let root = dir.path().join("photos");
@@ -1377,4 +1474,325 @@ fn search_names_only_and_content_only_are_mutually_exclusive() {
         ])
         .assert()
         .failure();
+}
+
+// ---------------------------------------------------------------------
+// config: show / path / init, and compress reading defaults/profiles
+// ---------------------------------------------------------------------
+
+/// A fresh, isolated `XDG_CONFIG_HOME` for a test that writes its own
+/// `vaqum/config.toml`, distinct from the empty one every test gets by
+/// default via `vaqum()`.
+fn config_home() -> TempDir {
+    TempDir::new().unwrap()
+}
+
+fn write_config(home: &TempDir, toml: &str) -> std::path::PathBuf {
+    let dir = home.path().join("vaqum");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    fs::write(&path, toml).unwrap();
+    path
+}
+
+#[test]
+fn config_path_prints_the_resolved_location() {
+    vaqum()
+        .args(["config", "path"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("vaqum").and(predicate::str::contains("config.toml")));
+}
+
+#[test]
+fn config_init_writes_a_starter_file_and_refuses_to_overwrite() {
+    let home = config_home();
+
+    vaqum()
+        .args(["config", "init"])
+        .env("XDG_CONFIG_HOME", home.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote starter config"));
+
+    let path = home.path().join("vaqum").join("config.toml");
+    assert!(path.exists(), "config init should create the file");
+    assert!(!fs::read_to_string(&path).unwrap().is_empty());
+
+    vaqum()
+        .args(["config", "init"])
+        .env("XDG_CONFIG_HOME", home.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+}
+
+#[test]
+fn config_show_without_a_file_reports_built_in_defaults() {
+    vaqum()
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not found"))
+        .stdout(predicate::str::contains("profiles: (none)"));
+}
+
+#[test]
+fn config_show_reports_resolved_defaults_and_profiles() {
+    let home = config_home();
+    write_config(
+        &home,
+        "[defaults]\nlevel = 5\n\n[profile.backup]\nmax = true\n",
+    );
+
+    vaqum()
+        .args(["config", "show"])
+        .env("XDG_CONFIG_HOME", home.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("level:    5"))
+        .stdout(predicate::str::contains("backup:"))
+        .stdout(predicate::str::contains("max:      true"));
+}
+
+#[test]
+fn compress_applies_config_defaults_exclude_without_a_profile() {
+    let home = config_home();
+    write_config(&home, "[defaults]\nexclude = [\"*.log\"]\n");
+
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("keep.txt"), "kept\n").unwrap();
+    fs::write(src.join("skip.log"), "skipped\n").unwrap();
+
+    let archive = dir.path().join("out.vaqum");
+    vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", home.path())
+        .assert()
+        .success();
+
+    let out_dir = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", home.path())
+        .assert()
+        .success();
+
+    let restored = out_dir.join("src");
+    assert!(restored.join("keep.txt").exists());
+    assert!(!restored.join("skip.log").exists());
+}
+
+#[test]
+fn compress_profile_flag_merges_with_defaults_and_applies_max() {
+    let home = config_home();
+    write_config(
+        &home,
+        "[defaults]\nexclude = [\"*.log\"]\n\n[profile.archive]\nmax = true\nexclude = [\"*.tmp\"]\n",
+    );
+
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("keep.txt"), "kept\n").unwrap();
+    fs::write(src.join("skip.log"), "skipped\n").unwrap();
+    fs::write(src.join("skip.tmp"), "skipped\n").unwrap();
+
+    let archive = dir.path().join("out.vaqum");
+    vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "--profile",
+            "archive",
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", home.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("xz (LZMA)"));
+
+    vaqum()
+        .args(["info", archive.to_str().unwrap()])
+        .env("XDG_CONFIG_HOME", home.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("xz (LZMA)"));
+}
+
+#[test]
+fn compress_unknown_profile_fails_with_a_clear_error() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("file.txt");
+    write_sample_text(&input, 50);
+
+    vaqum()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "--profile",
+            "does-not-exist",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no profile named 'does-not-exist'",
+        ));
+}
+
+// ---------------------------------------------------------------------
+// reading foreign archives: zip, tar.gz
+// ---------------------------------------------------------------------
+
+fn build_zip_fixture(path: &std::path::Path) {
+    use std::io::Write as _;
+    let file = fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("a.txt", options).unwrap();
+    zip.write_all(b"hello from zip\n").unwrap();
+    zip.add_directory("sub/", options).unwrap();
+    zip.start_file("sub/b.txt", options).unwrap();
+    zip.write_all(b"nested\n").unwrap();
+    zip.finish().unwrap();
+}
+
+fn build_tar_gz_fixture(path: &std::path::Path) {
+    let file = fs::File::create(path).unwrap();
+    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    let mut builder = tar::Builder::new(encoder);
+    builder
+        .append_data(
+            &mut tar_header(b"hello from tar.gz\n".len() as u64),
+            "a.txt",
+            &b"hello from tar.gz\n"[..],
+        )
+        .unwrap();
+    builder
+        .append_data(
+            &mut tar_header(b"nested\n".len() as u64),
+            "sub/b.txt",
+            &b"nested\n"[..],
+        )
+        .unwrap();
+    builder.into_inner().unwrap().finish().unwrap();
+}
+
+fn tar_header(size: u64) -> tar::Header {
+    let mut header = tar::Header::new_gnu();
+    header.set_size(size);
+    header.set_mode(0o644);
+    header.set_cksum();
+    header
+}
+
+#[test]
+fn decompress_reads_a_zip_archive() {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("archive.zip");
+    build_zip_fixture(&archive);
+
+    let out_dir = dir.path().join("out");
+    vaqum()
+        .args(["decompress", archive.to_str().unwrap(), "-o"])
+        .arg(&out_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Extracted 2 file(s) from zip archive",
+        ));
+
+    assert_eq!(
+        fs::read_to_string(out_dir.join("a.txt")).unwrap(),
+        "hello from zip\n"
+    );
+    assert_eq!(
+        fs::read_to_string(out_dir.join("sub/b.txt")).unwrap(),
+        "nested\n"
+    );
+}
+
+#[test]
+fn decompress_reads_a_tar_gz_archive() {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("archive.tar.gz");
+    build_tar_gz_fixture(&archive);
+
+    let out_dir = dir.path().join("out");
+    vaqum()
+        .args(["decompress", archive.to_str().unwrap(), "-o"])
+        .arg(&out_dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Extracted 2 file(s) from tar.gz archive",
+        ));
+
+    assert_eq!(
+        fs::read_to_string(out_dir.join("a.txt")).unwrap(),
+        "hello from tar.gz\n"
+    );
+    assert_eq!(
+        fs::read_to_string(out_dir.join("sub/b.txt")).unwrap(),
+        "nested\n"
+    );
+}
+
+#[test]
+fn info_on_a_zip_archive_shows_file_count_and_sizes() {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("archive.zip");
+    build_zip_fixture(&archive);
+
+    vaqum()
+        .args(["info", archive.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("type:         zip archive"))
+        .stdout(predicate::str::contains("files:        2"));
+}
+
+#[test]
+fn info_on_a_tar_gz_archive_shows_file_count_and_sizes() {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("archive.tar.gz");
+    build_tar_gz_fixture(&archive);
+
+    vaqum()
+        .args(["info", archive.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("type:         tar.gz archive"))
+        .stdout(predicate::str::contains("files:        2"));
+}
+
+#[test]
+fn decompress_rejects_a_plain_non_archive_file_with_a_clear_error() {
+    let dir = TempDir::new().unwrap();
+    let bogus = dir.path().join("notes.txt");
+    fs::write(&bogus, b"just some text, not an archive").unwrap();
+
+    vaqum()
+        .args(["decompress", bogus.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "is not a .vaqum, zip, or tar.gz archive",
+        ));
 }

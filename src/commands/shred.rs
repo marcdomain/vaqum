@@ -10,9 +10,11 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use indicatif::ProgressBar;
 use rand::Rng;
 
 use crate::cli::ShredArgs;
+use crate::progress;
 use crate::util::{human_bytes, prompt_line};
 
 const CHUNK_SIZE: usize = 1024 * 1024;
@@ -55,10 +57,16 @@ pub fn run(args: ShredArgs) -> Result<()> {
         }
     }
 
+    let bar = progress::bar(
+        total_size * args.passes.max(1) as u64,
+        args.quiet,
+        "Shredding",
+    );
     for (path, _len) in &targets {
-        shred_file(path, args.passes)
+        shred_file(path, args.passes, &bar)
             .with_context(|| format!("failed to shred {}", path.display()))?;
     }
+    bar.finish_and_clear();
 
     if is_dir {
         fs::remove_dir_all(&args.path)
@@ -112,7 +120,7 @@ fn print_warning(root: &Path, targets: &[Target], total_size: u64, is_dir: bool)
 }
 
 /// Overwrite a file's content `passes` times, then truncate and unlink it.
-fn shred_file(path: &Path, passes: u32) -> Result<()> {
+fn shred_file(path: &Path, passes: u32, bar: &ProgressBar) -> Result<()> {
     let len = fs::metadata(path)
         .with_context(|| format!("failed to stat {}", path.display()))?
         .len();
@@ -134,7 +142,7 @@ fn shred_file(path: &Path, passes: u32) -> Result<()> {
         } else {
             Pattern::Ones
         };
-        overwrite_pass(&mut file, len, pattern)
+        overwrite_pass(&mut file, len, pattern, bar)
             .with_context(|| format!("overwrite pass {} on {}", pass + 1, path.display()))?;
     }
 
@@ -153,7 +161,7 @@ enum Pattern {
     Random,
 }
 
-fn overwrite_pass(file: &mut File, len: u64, pattern: Pattern) -> Result<()> {
+fn overwrite_pass(file: &mut File, len: u64, pattern: Pattern, bar: &ProgressBar) -> Result<()> {
     file.seek(SeekFrom::Start(0))?;
 
     let buf_len = CHUNK_SIZE.min(len.max(1) as usize);
@@ -172,6 +180,7 @@ fn overwrite_pass(file: &mut File, len: u64, pattern: Pattern) -> Result<()> {
             rng.fill_bytes(&mut buf[..n]);
         }
         file.write_all(&buf[..n])?;
+        bar.inc(n as u64);
         remaining -= n as u64;
     }
 

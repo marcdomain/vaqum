@@ -10,10 +10,49 @@ use crate::cli::DecompressArgs;
 use crate::codec;
 use crate::crypto;
 use crate::dedup;
-use crate::format::{EntryType, HashingWriter, Header};
+use crate::foreign::{self, ForeignFormat};
+use crate::format::{self, EntryType, HashingWriter, Header};
+use crate::progress::{self, ProgressReader};
 use crate::util::{hex_encode, human_bytes};
 
 pub fn run(args: DecompressArgs) -> Result<()> {
+    if format::is_vaqum_file(&args.path)? {
+        return run_vaqum(args);
+    }
+    if let Some(fmt) = foreign::detect(&args.path)? {
+        return run_foreign(args, fmt);
+    }
+    bail!(
+        "'{}' is not a .vaqum, zip, or tar.gz archive",
+        args.path.display()
+    );
+}
+
+fn run_foreign(args: DecompressArgs, fmt: ForeignFormat) -> Result<()> {
+    let stats = foreign::inspect(&args.path, fmt)?;
+    let dest = args.output.clone().unwrap_or(env::current_dir()?);
+    bomb::check(
+        stats.uncompressed_size,
+        stats.compressed_size,
+        &dest,
+        args.max_ratio,
+        args.force,
+    )?;
+    foreign::extract(&args.path, fmt, &dest)?;
+    println!(
+        "✔ Extracted {} file(s) from {} archive -> {}",
+        stats.file_count,
+        fmt.label(),
+        dest.display()
+    );
+    if args.verbose {
+        println!("  uncompressed: {}", human_bytes(stats.uncompressed_size));
+        println!("  compressed:   {}", human_bytes(stats.compressed_size));
+    }
+    Ok(())
+}
+
+fn run_vaqum(args: DecompressArgs) -> Result<()> {
     let mut in_file = File::open(&args.path)
         .with_context(|| format!("failed to open {}", args.path.display()))?;
     let total_size = in_file.metadata()?.len();
@@ -36,6 +75,8 @@ pub fn run(args: DecompressArgs) -> Result<()> {
     let key_ref = key.as_ref().map(|k| (k, &header.nonce_prefix));
     let decrypt_reader = crypto::DecryptReader::new(in_file, key_ref);
     let decoder = codec::Decoder::new(decrypt_reader, header.algorithm)?;
+    let bar = progress::bar(header.original_size, args.quiet, "Decompressing");
+    let decoder = ProgressReader::new(decoder, bar.clone());
 
     match header.entry_type {
         EntryType::File => decompress_file(decoder, &header, &args)?,
@@ -49,6 +90,7 @@ pub fn run(args: DecompressArgs) -> Result<()> {
             decompress_tar(decoder, &header, &args, &output_base)?;
         }
     }
+    bar.finish_and_clear();
 
     Ok(())
 }
@@ -81,7 +123,7 @@ fn bomb_check_dir(header: &Header, args: &DecompressArgs) -> Result<PathBuf> {
 }
 
 fn decompress_file<R: io::Read>(
-    mut decoder: codec::Decoder<R>,
+    mut decoder: R,
     header: &Header,
     args: &DecompressArgs,
 ) -> Result<()> {
@@ -113,7 +155,7 @@ fn decompress_file<R: io::Read>(
 }
 
 fn decompress_tar<R: io::Read>(
-    mut decoder: codec::Decoder<R>,
+    mut decoder: R,
     header: &Header,
     args: &DecompressArgs,
     target_dir: &Path,

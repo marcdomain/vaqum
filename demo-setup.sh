@@ -48,3 +48,22 @@ printf 'module.exports = () => {};\n' > webapp/node_modules/left-pad/index.js
 mkdir -p app/TODO-cleanup
 printf 'fn main() {\n    // TODO: wire up config\n}\n' > app/main.rs
 printf '// TODO: add tests\npub fn helper() {}\n' > app/util.rs
+
+# For `config`/`compress --profile`: written straight to where the demo's
+# sandboxed $HOME will point once the tape exports it, since this script
+# runs before that export.
+mkdir -p "$DEMO_DIR/.config/vaqum"
+{
+  echo '[defaults]'
+  echo 'exclude = ["*.log"]'
+  echo
+  echo '[profile.release]'
+  echo 'max = true'
+} > "$DEMO_DIR/.config/vaqum/config.toml"
+
+# For `decompress`/`info` reading foreign archive formats.
+mkdir -p archive-src
+printf 'shared with a teammate on zip\n' > archive-src/notes.txt
+(cd archive-src && zip -qr ../shared.zip .)
+tar -czf shared.tar.gz -C archive-src .
+rm -rf archive-src

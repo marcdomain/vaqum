@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::cli::InfoArgs;
+use crate::foreign::{self, ForeignFormat};
 use crate::format::{self, EntryType, read_header_and_total_size};
 use crate::util::{format_time, hash_file, hex_encode, human_bytes};
 
@@ -12,10 +13,12 @@ pub fn run(args: InfoArgs) -> Result<()> {
         bail!("'{}' does not exist", path.display());
     }
 
-    if path.is_file() && format::is_vaqum_file(path)? {
-        show_vaqum_info(path)
-    } else if path.is_dir() {
+    if path.is_dir() {
         show_dir_info(path)
+    } else if format::is_vaqum_file(path)? {
+        show_vaqum_info(path)
+    } else if let Some(fmt) = foreign::detect(path)? {
+        show_foreign_info(path, fmt)
     } else {
         show_file_info(path)
     }
@@ -56,6 +59,27 @@ fn show_vaqum_info(path: &Path) -> Result<()> {
     println!(
         "  encrypted:    {}",
         if header.encrypted { "yes" } else { "no" }
+    );
+
+    Ok(())
+}
+
+fn show_foreign_info(path: &Path, fmt: ForeignFormat) -> Result<()> {
+    let stats = foreign::inspect(path, fmt)?;
+    let ratio = if stats.compressed_size > 0 {
+        stats.uncompressed_size as f64 / stats.compressed_size as f64
+    } else {
+        1.0
+    };
+
+    println!("{}", path.display());
+    println!("  type:         {} archive", fmt.label());
+    println!("  files:        {}", stats.file_count);
+    println!("  uncompressed: {}", human_bytes(stats.uncompressed_size));
+    println!(
+        "  compressed:   {} ({:.2}x)",
+        human_bytes(stats.compressed_size),
+        ratio
     );
 
     Ok(())

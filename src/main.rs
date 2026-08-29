@@ -2,10 +2,13 @@ mod bomb;
 mod cli;
 mod codec;
 mod commands;
+mod config;
 mod crypto;
 mod dedup;
 mod exclude;
+mod foreign;
 mod format;
+mod progress;
 mod util;
 
 use clap::Parser;
@@ -28,6 +31,7 @@ fn main() {
         Command::Diff(args) => exit_on_match_result(commands::diff::run(args)),
         Command::Search(args) => exit_on_match_result(commands::search::run(args)),
         Command::Completions(args) => exit_on_result(commands::completions::run(args)),
+        Command::Config(args) => exit_on_result(commands::config::run(args.action)),
     }
 }
 

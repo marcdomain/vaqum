@@ -6,10 +6,12 @@ use anyhow::{Context, Result, bail};
 
 use crate::cli::CompressArgs;
 use crate::codec;
+use crate::config::Config;
 use crate::crypto;
 use crate::dedup;
 use crate::exclude::ExcludeSet;
 use crate::format::{Algorithm, CountingWriter, EntryType, HashingWriter, Header};
+use crate::progress::{self, ProgressWriter};
 use crate::util::human_bytes;
 
 /// Result of streaming a source (file, directory, or multi-path bundle)
@@ -54,11 +56,23 @@ pub fn run(args: CompressArgs) -> Result<()> {
         }
     }
     let is_single_dir = paths.len() == 1 && paths[0].is_dir();
-    if args.dedup && !is_single_dir {
+
+    let config = Config::load()?;
+    let resolved = config.resolve_compress(args.profile.as_deref())?;
+    let level = args.level.or(resolved.level).unwrap_or(9);
+    let use_max = args.max || resolved.max.unwrap_or(false);
+    let dedup_enabled = args.dedup || resolved.dedup.unwrap_or(false);
+    let threads_opt = args.threads.or(resolved.threads);
+    let mut exclude_patterns = args.exclude.clone();
+    exclude_patterns.extend(resolved.exclude);
+    let wants_encryption =
+        args.encrypt || args.key_file.is_some() || resolved.encrypt.unwrap_or(false);
+
+    if dedup_enabled && !is_single_dir {
         bail!("--dedup only applies to a single directory compressed with -r");
     }
 
-    let algorithm = if args.max {
+    let algorithm = if use_max {
         Algorithm::Xz
     } else {
         Algorithm::Zstd
@@ -68,32 +82,35 @@ pub fn run(args: CompressArgs) -> Result<()> {
         [_single] => EntryType::File,
         _ => EntryType::Bundle,
     };
-    let threads = args.threads.unwrap_or_else(|| {
+    let threads = threads_opt.unwrap_or_else(|| {
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)
     });
     let name = describe_paths(paths);
 
-    let wants_encryption = args.encrypt || args.key_file.is_some();
+    let total_bytes = total_input_bytes(paths, &exclude_patterns)?;
 
     if args.dry_run {
         if wants_encryption {
             bail!("--dry-run doesn't support -e/--key-file; it only estimates compression");
         }
+        let bar = progress::bar(total_bytes, args.quiet, "Compressing");
         let stats = build_payload(
             paths,
-            args.dedup,
-            &args.exclude,
+            dedup_enabled,
+            &exclude_patterns,
             algorithm,
-            args.level,
+            level,
             threads,
             io::sink(),
             args.verbose,
             None,
+            bar.clone(),
         )?;
+        bar.finish_and_clear();
         println!("(dry run) would compress '{name}':");
-        print_summary(&stats, algorithm, args.dedup);
+        print_summary(&stats, algorithm, dedup_enabled);
         return Ok(());
     }
 
@@ -120,6 +137,7 @@ pub fn run(args: CompressArgs) -> Result<()> {
     };
     let tmp_path = sibling_temp_path(&output_path);
 
+    let bar = progress::bar(total_bytes, args.quiet, "Compressing");
     let stats = {
         let tmp_file = File::create(&tmp_path)
             .with_context(|| format!("failed to create temporary file {}", tmp_path.display()))?;
@@ -128,20 +146,22 @@ pub fn run(args: CompressArgs) -> Result<()> {
             .map(|(key, nonce_prefix, _)| (key, nonce_prefix));
         let result = build_payload(
             paths,
-            args.dedup,
-            &args.exclude,
+            dedup_enabled,
+            &exclude_patterns,
             algorithm,
-            args.level,
+            level,
             threads,
             tmp_file,
             args.verbose,
             encrypt_key,
+            bar.clone(),
         );
         if result.is_err() {
             let _ = fs::remove_file(&tmp_path);
         }
         result?
     };
+    bar.finish_and_clear();
 
     let (salt, nonce_prefix) = match &encryption {
         Some((_, nonce_prefix, salt)) => (*salt, *nonce_prefix),
@@ -150,7 +170,7 @@ pub fn run(args: CompressArgs) -> Result<()> {
     let header = Header {
         entry_type,
         algorithm,
-        dedup: args.dedup,
+        dedup: dedup_enabled,
         encrypted: wants_encryption,
         original_size: stats.original_size,
         checksum: stats.checksum,
@@ -173,7 +193,7 @@ pub fn run(args: CompressArgs) -> Result<()> {
     if wants_encryption {
         println!("  encryption:   ChaCha20-Poly1305, Argon2id KDF");
     }
-    print_summary(&stats, algorithm, args.dedup);
+    print_summary(&stats, algorithm, dedup_enabled);
     let ratio = if stats.original_size > 0 {
         stats.original_size as f64 / total_out.max(1) as f64
     } else {
@@ -206,11 +226,14 @@ fn build_payload<W: Write>(
     dest: W,
     verbose: bool,
     encrypt_key: Option<(&crypto::Key, &crypto::NoncePrefix)>,
+    bar: indicatif::ProgressBar,
 ) -> Result<PayloadStats> {
     let counting = CountingWriter::new(dest);
     let encrypt_writer = crypto::EncryptWriter::new(counting, encrypt_key);
     let encoder = codec::Encoder::new(encrypt_writer, algorithm, level, threads as u32)?;
-    let hashing = HashingWriter::new(encoder);
+    // Tracks pre-compression bytes flowing into the encoder.
+    let progress_writer = ProgressWriter::new(encoder, bar);
+    let hashing = HashingWriter::new(progress_writer);
 
     let hashing = match paths {
         [single] if !single.is_dir() => {
@@ -255,8 +278,9 @@ fn build_payload<W: Write>(
         }
     };
 
-    let (encoder, original_size, checksum) = hashing.into_inner_with_stats();
-    let encrypt_writer = encoder
+    let (progress_writer, original_size, checksum) = hashing.into_inner_with_stats();
+    let encrypt_writer = progress_writer
+        .into_inner()
         .finish()
         .context("failed to finalize compressed stream")?;
     let counting = encrypt_writer
@@ -357,6 +381,34 @@ fn prefixed_posix_path(prefix: &str, rel: &Path) -> String {
     } else {
         format!("{prefix}/{rel_str}")
     }
+}
+
+fn total_input_bytes(paths: &[PathBuf], exclude_patterns: &[String]) -> Result<u64> {
+    let mut total = 0u64;
+    for path in paths {
+        if path.is_dir() {
+            let exclude = ExcludeSet::build(path, exclude_patterns)?;
+            let walker = walkdir::WalkDir::new(path)
+                .min_depth(1)
+                .into_iter()
+                .filter_entry(|e| {
+                    let rel = e
+                        .path()
+                        .strip_prefix(path)
+                        .expect("walkdir entries are under root");
+                    !exclude.is_excluded(&crate::util::to_posix_path(rel), e.file_type().is_dir())
+                });
+            for entry in walker {
+                let entry = entry.with_context(|| format!("failed to walk {}", path.display()))?;
+                if entry.file_type().is_file() {
+                    total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                }
+            }
+        } else {
+            total += path.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    Ok(total)
 }
 
 fn basename_of(path: &Path) -> String {

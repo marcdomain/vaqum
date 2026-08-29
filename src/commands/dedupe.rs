@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::cli::DedupeArgs;
+use crate::progress;
 use crate::util::{TreeFile, hash_tree, hex_encode, human_bytes};
 
 pub fn run(args: DedupeArgs) -> Result<()> {
@@ -23,7 +24,16 @@ pub fn run(args: DedupeArgs) -> Result<()> {
             .unwrap_or(1)
     });
 
-    let (_, files) = hash_tree(&args.path, threads, None)?;
+    let total_bytes: u64 = walkdir::WalkDir::new(&args.path)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+        .sum();
+    let bar = progress::bar(total_bytes, args.quiet, "Scanning");
+    let (_, files) = hash_tree(&args.path, threads, None, Some(&bar))?;
+    bar.finish_and_clear();
 
     let mut groups: HashMap<[u8; 32], Vec<&TreeFile>> = HashMap::new();
     for file in &files {

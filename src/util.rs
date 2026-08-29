@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use humansize::{DECIMAL, format_size};
+use indicatif::ProgressBar;
 
 use crate::exclude::ExcludeSet;
 
@@ -66,13 +67,15 @@ pub struct TreeFile {
 /// Shared by `compress --dedup`, `dedupe`, and `diff`, so a directory only
 /// ever gets walked and hashed one way in this codebase. `exclude`, when
 /// given, prunes matching entries (and doesn't descend into excluded
-/// directories at all).
+/// directories at all). `progress`, when given, is advanced by each file's
+/// size as it finishes hashing.
 ///
 /// Symlinks and other special files are skipped.
 pub fn hash_tree(
     root: &Path,
     threads: usize,
     exclude: Option<&ExcludeSet>,
+    progress: Option<&ProgressBar>,
 ) -> Result<(Vec<String>, Vec<TreeFile>)> {
     let mut dirs = Vec::new();
     let mut candidates: Vec<(String, PathBuf, Option<u32>)> = Vec::new();
@@ -109,7 +112,13 @@ pub fn hash_tree(
         use rayon::prelude::*;
         candidates
             .par_iter()
-            .map(|(_, abs, _)| hash_file(abs))
+            .map(|(_, abs, _)| {
+                let result = hash_file(abs);
+                if let (Some(bar), Ok((size, _))) = (progress, &result) {
+                    bar.inc(*size);
+                }
+                result
+            })
             .collect()
     });
 

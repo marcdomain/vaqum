@@ -15,9 +15,11 @@ argon2 = "0.5.3"
 chacha20poly1305 = { version = "0.10.1", features = ["stream"] }
 clap = { version = "4.6.6", features = ["derive"] }
 clap_complete = "4.6.9"
+flate2 = "1.1.10"
 fs2 = "0.4.3"
 globset = "0.4.20"
 humansize = "2.1.3"
+indicatif = "0.18.6"
 rand = "0.10.2"
 rayon = "1.12.0"
 regex = "1.13.1"
@@ -29,8 +31,10 @@ similar = "3.2.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
 time = { version = "0.3.55", features = ["formatting"] }
+toml = "1.1.4"
 walkdir = "2.5.0"
 xz2 = { version = "0.1.7", features = ["static"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 zstd = { version = "0.13.3", features = ["zstdmt"] }
 zxcvbn = "3.1.1"
 
