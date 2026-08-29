@@ -1511,6 +1511,7 @@ fn config_init_writes_a_starter_file_and_refuses_to_overwrite() {
     vaqum()
         .args(["config", "init"])
         .env("XDG_CONFIG_HOME", home.path())
+        .env("APPDATA", home.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("Wrote starter config"));
@@ -1522,6 +1523,7 @@ fn config_init_writes_a_starter_file_and_refuses_to_overwrite() {
     vaqum()
         .args(["config", "init"])
         .env("XDG_CONFIG_HOME", home.path())
+        .env("APPDATA", home.path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("already exists"));
@@ -1548,6 +1550,7 @@ fn config_show_reports_resolved_defaults_and_profiles() {
     vaqum()
         .args(["config", "show"])
         .env("XDG_CONFIG_HOME", home.path())
+        .env("APPDATA", home.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("level:    5"))
@@ -1576,6 +1579,7 @@ fn compress_applies_config_defaults_exclude_without_a_profile() {
             archive.to_str().unwrap(),
         ])
         .env("XDG_CONFIG_HOME", home.path())
+        .env("APPDATA", home.path())
         .assert()
         .success();
 
@@ -1588,6 +1592,7 @@ fn compress_applies_config_defaults_exclude_without_a_profile() {
             out_dir.to_str().unwrap(),
         ])
         .env("XDG_CONFIG_HOME", home.path())
+        .env("APPDATA", home.path())
         .assert()
         .success();
 
@@ -1623,6 +1628,7 @@ fn compress_profile_flag_merges_with_defaults_and_applies_max() {
             archive.to_str().unwrap(),
         ])
         .env("XDG_CONFIG_HOME", home.path())
+        .env("APPDATA", home.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("xz (LZMA)"));
@@ -1630,6 +1636,7 @@ fn compress_profile_flag_merges_with_defaults_and_applies_max() {
     vaqum()
         .args(["info", archive.to_str().unwrap()])
         .env("XDG_CONFIG_HOME", home.path())
+        .env("APPDATA", home.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("xz (LZMA)"));
