@@ -9,15 +9,11 @@ Losslessly compress files 5x faster and 12% smaller output than zip/gzip at defa
 ## Install
 
 ```sh
-brew tap marcdomain/vaqum && brew install vaqum   # macOS / Linux
 npm i -g @marcdomain/vaqum                        # macOS / Linux / Windows
 curl -fsSL https://raw.githubusercontent.com/marcdomain/vaqum/main/install.sh | sh   # macOS / Linux, no deps
 irm https://raw.githubusercontent.com/marcdomain/vaqum/main/install.ps1 | iex        # Windows, no deps
 cargo install --path .                            # from source
 ```
-
-The Homebrew tap + install can also be done in one line:
-`brew install marcdomain/vaqum/vaqum` (`user/tap/formula`).
 
 ## Usage
 
