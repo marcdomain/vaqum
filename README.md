@@ -6,6 +6,23 @@ Losslessly compress files 5x faster and 12% smaller output than zip/gzip at defa
 
 ![vaqum demo](demo.gif)
 
+## Features
+
+| Feature | Command | Highlights |
+| --- | --- | --- |
+| Compression | `compress` | Lossless, levels 1–22 (`--max`), multithreaded, bundles multiple files/dirs into one archive, `--dedup`, `--exclude` / `.vaqumignore`, `--dry-run` |
+| Encryption | `compress -e` / `--key-file` | ChaCha20-Poly1305 with an Argon2id-derived password or keyfile; only the salt is stored |
+| Decompression | `decompress` | Auto-detects encryption, `--verify`, also reads `.zip` and `.tar.gz`/`.tgz` |
+| Bomb protection | `decompress` | Refuses implausible expansion ratios (>1000:1 by default) or archives exceeding free disk space; tune with `--max-ratio`, bypass with `--force` |
+| Diff | `diff` | Files, dirs, or `.vaqum` archives in any mix; terminal unified diff, offline side-by-side HTML report (`--html` / `--open`), or editor split view (`-e`) |
+| Duplicate finder | `dedupe` | Finds duplicate files, optionally replaces them with hardlinks (`--link`), multithreaded |
+| Secure delete | `shred` | Multi-pass overwrite (`-p`), recursive, `--dry-run` |
+| Inspection | `info` | Archive compression stats, or size/checksum/timestamps for plain files and dirs |
+| Config & profiles | `config` | Persisted defaults in `config.toml` with `[defaults]`, `[compress]`, and named `[profile.<name>]` sections |
+| Shell completions | `completions` | bash, zsh, fish, PowerShell, elvish; `--install` writes to the standard user directory |
+| Progress bars | all long-running commands | Shown on interactive terminals, auto-hidden when piped, `-q` to silence |
+| Cross-platform | — | macOS, Linux, Windows via npm, shell/PowerShell installers, or Cargo |
+
 ## Install
 
 ```sh
