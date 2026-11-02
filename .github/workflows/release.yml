@@ -274,9 +274,42 @@ jobs:
             exit 1
           fi
 
-      - run: npm publish --access public
+      - name: Test npm package
+        run: npm test
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One npm package per platform (e.g. @marcdomain/vaqum-darwin-arm64),
+      # installed via the main package's optionalDependencies. Fails if any
+      # platform wasn't built, so the main package never points at a
+      # platform package that doesn't exist.
+      - name: Build platform packages
+        run: node scripts/build-platform-packages.js --version "${{ needs.verify-branch.outputs.version }}" --dist ../dist --out platforms
+
+      # Platform packages first, main package last. Already-published
+      # versions are skipped, so re-running a half-failed release is safe.
+      - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.verify-branch.outputs.version }}
+        run: |
+          set -euo pipefail
+          publish() {
+            local dir="$1" name
+            name="$(node -p "require('./$dir/package.json').name")"
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "$name@$VERSION already published, skipping"
+              return
+            fi
+            (cd "$dir" && npm publish --access public)
+          }
+          for dir in platforms/*/; do
+            publish "${dir%/}"
+          done
+          publish .
 
   check-homebrew-secret:
     needs: [plan, github-release]

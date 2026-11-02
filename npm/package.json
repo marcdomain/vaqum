@@ -1,6 +1,6 @@
 {
   "name": "@marcdomain/vaqum",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "publishConfig": {
     "access": "public",
     "provenance": true
@@ -42,5 +42,18 @@
   ],
   "engines": {
     "node": ">=16"
-  }
+  },
+  "optionalDependencies": {
+    "@marcdomain/vaqum-darwin-x64": "1.2.5",
+    "@marcdomain/vaqum-darwin-arm64": "1.2.5",
+    "@marcdomain/vaqum-linux-x64": "1.2.5",
+    "@marcdomain/vaqum-linux-arm64": "1.2.5",
+    "@marcdomain/vaqum-android-arm64": "1.2.5",
+    "@marcdomain/vaqum-win32-x64": "1.2.5"
+  },
+  "files": [
+    "bin/vaqum.js",
+    "lib/",
+    "install.js"
+  ]
 }

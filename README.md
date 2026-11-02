@@ -85,6 +85,9 @@ CI runs the same checks on Linux, macOS, and Windows for every push/PR.
 Tagged releases (`vX.Y.Z`) trigger `.github/workflows/release.yml`, which
 cross-builds binaries, publishes a GitHub Release, and pushes to npm and
 the Homebrew tap — see `packaging/homebrew/README.md` for tap setup.
+On npm, each platform's binary is published as its own package
+(`@marcdomain/vaqum-<os>-<arch>`, built by `npm/scripts/build-platform-packages.js`)
+and pulled in through the main package's `optionalDependencies`.
 
 Re-record the demo above with [VHS](https://github.com/charmbracelet/vhs)
 after `cargo install --path .`: `vhs demo.tape` (uses `demo-setup.sh` for

@@ -10,10 +10,21 @@ npm i -g @marcdomain/vaqum
 
 ![vaqum demo](https://raw.githubusercontent.com/marcdomain/vaqum/main/demo.gif)
 
-This package is a thin wrapper: `npm install` fetches the real native
-`vaqum` binary for your platform from the matching [GitHub
-Release](https://github.com/marcdomain/vaqum/releases), verifies its
-checksum, and installs it as the `vaqum` command.
+This package is a thin wrapper around the native `vaqum` binary. The binary
+for your platform comes from a small companion package (e.g.
+`@marcdomain/vaqum-darwin-arm64`) that npm, pnpm, yarn and Bun pick
+automatically. Install scripts aren't required.
+
+If that package is skipped (`--omit=optional`, or a lockfile made on another
+OS), the binary is downloaded from the npm registry instead, with the
+[GitHub Release](https://github.com/marcdomain/vaqum/releases) as a backup,
+and verified before use. This happens during install, or on first run if
+install scripts are disabled.
+
+Environment variables:
+
+- `VAQUM_BINARY_PATH`: use this binary instead of the bundled one.
+- `VAQUM_CACHE_DIR`: where a first-run download is cached.
 
 ## Usage
 
