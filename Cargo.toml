@@ -11,7 +11,7 @@ categories = ["command-line-utilities", "compression"]
 
 [dependencies]
 anyhow = "1.0.104"
-argon2 = "0.5.3"
+argon2 = "0.6.0"
 chacha20poly1305 = { version = "0.10.1", features = ["stream"] }
 clap = { version = "4.6.6", features = ["derive"] }
 clap_complete = "4.6.9"
@@ -35,7 +35,7 @@ toml = "1.1.4"
 walkdir = "2.5.0"
 xz2 = { version = "0.1.7", features = ["static"] }
 zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
-zstd = { version = "0.13.5", features = ["zstdmt"] }
+zstd = { version = "0.14.4", features = ["zstdmt"] }
 zxcvbn = "3.1.1"
 
 # Single-binary distribution (see project brief) favors a smaller, faster
