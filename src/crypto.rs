@@ -19,9 +19,24 @@ pub type Salt = [u8; SALT_LEN];
 pub type NoncePrefix = [u8; NONCE_PREFIX_LEN];
 pub type Key = chacha20poly1305::Key;
 
-pub fn derive_key(password: &[u8], salt: &Salt) -> Result<Key> {
+/// Argon2id settings for archives encrypted by this version: 64 MiB of
+/// memory and 3 passes, several times costlier to brute-force than the
+/// library defaults (19 MiB, 2 passes) that older archives were made with.
+const STRONG_MEMORY_KIB: u32 = 64 * 1024;
+const STRONG_PASSES: u32 = 3;
+
+/// Derives the archive key from a password or keyfile. `strong` selects
+/// the current settings; `false` is only for reading older archives.
+pub fn derive_key(password: &[u8], salt: &Salt, strong: bool) -> Result<Key> {
     let mut bytes = [0u8; 32];
-    Argon2::default()
+    let argon = if strong {
+        let params = argon2::Params::new(STRONG_MEMORY_KIB, STRONG_PASSES, 1, Some(32))
+            .map_err(|e| anyhow::anyhow!("invalid key derivation settings: {e}"))?;
+        Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
+    } else {
+        Argon2::default()
+    };
+    argon
         .hash_password_into(password, salt, &mut bytes)
         .map_err(|e| anyhow::anyhow!("key derivation failed: {e}"))?;
     Ok(Key::from(bytes))
@@ -274,6 +289,21 @@ pub fn prompt_new_password() -> Result<String> {
 
 pub fn prompt_existing_password() -> Result<String> {
     rpassword::prompt_password("Enter password: ").context("failed to read password")
+}
+
+/// The key to open an encrypted archive: from `key_file` if given,
+/// otherwise from a password typed at the terminal.
+pub fn key_for_archive(
+    key_file: Option<&std::path::Path>,
+    salt: &Salt,
+    strong: bool,
+) -> Result<Key> {
+    let key_material = match key_file {
+        Some(path) => std::fs::read(path)
+            .with_context(|| format!("failed to read key file {}", path.display()))?,
+        None => prompt_existing_password()?.into_bytes(),
+    };
+    derive_key(&key_material, salt, strong)
 }
 
 fn warn_if_weak(password: &str) {

@@ -4,11 +4,25 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, so a newly published advisory is caught even with no pushes.
+  schedule:
+    - cron: '0 6 * * 1'
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Fails on any dependency with a known vulnerability, unsound code, or a
+  # yanked release (RustSec advisory database).
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version 0.23.0
+      - name: Audit dependencies
+        run: cargo audit --deny unsound --deny yanked
+
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -17,14 +31,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -49,8 +64,8 @@ jobs:
       run:
         working-directory: npm
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
       - run: npm test

@@ -23,6 +23,12 @@ const CHUNK_SIZE: usize = 1024 * 1024;
 type Target = (PathBuf, u64);
 
 pub fn run(args: ShredArgs) -> Result<()> {
+    if fs::symlink_metadata(&args.path).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!(
+            "'{}' is a symlink; refusing to shred the file it points to. Pass that file's real path if that's what you mean",
+            args.path.display()
+        );
+    }
     if !args.path.exists() {
         bail!("'{}' does not exist", args.path.display());
     }
@@ -78,10 +84,6 @@ pub fn run(args: ShredArgs) -> Result<()> {
         args.passes,
         if args.passes == 1 { "" } else { "es" }
     );
-    println!(
-        "  note: on SSDs, overwrite passes are best-effort (wear-leveling/TRIM) — not forensic-grade."
-    );
-
     Ok(())
 }
 
@@ -117,6 +119,13 @@ fn print_warning(root: &Path, targets: &[Target], total_size: u64, is_dir: bool)
     } else {
         println!("    {} ({})", root.display(), human_bytes(total_size));
     }
+    println!();
+    println!("   Overwriting is best-effort. It may not remove every copy of the data:");
+    println!("   - SSDs and flash drives move data around internally (wear-leveling).");
+    println!("   - Copy-on-write filesystems (APFS, the macOS default; btrfs; ZFS) write");
+    println!("     changes to new blocks, leaving the old ones in place.");
+    println!("   - Backups, snapshots (e.g. Time Machine) and cloud sync keep their own copies.");
+    println!("   For real protection, use full-disk encryption (FileVault, BitLocker, LUKS).");
 }
 
 /// Overwrite a file's content `passes` times, then truncate and unlink it.

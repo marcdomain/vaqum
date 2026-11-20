@@ -16,7 +16,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::exclude::ExcludeSet;
@@ -106,6 +106,8 @@ pub fn unpack_tar<R: Read>(
     dedup: bool,
     staging_dir: &Path,
     dest_dir: &Path,
+    shown_prefix: &str,
+    ext: &mut crate::extract::Extracted,
 ) -> Result<()> {
     if dedup {
         fs::create_dir_all(staging_dir)
@@ -113,15 +115,11 @@ pub fn unpack_tar<R: Read>(
         tar::Archive::new(reader)
             .unpack(staging_dir)
             .context("failed to unpack dedup archive")?;
-        resolve_dedup_tree(staging_dir, dest_dir)
+        resolve_dedup_tree(staging_dir, dest_dir, shown_prefix, ext)
             .context("failed to reconstruct deduplicated files")?;
         fs::remove_dir_all(staging_dir).ok();
     } else {
-        fs::create_dir_all(dest_dir)
-            .with_context(|| format!("failed to create {}", dest_dir.display()))?;
-        tar::Archive::new(reader)
-            .unpack(dest_dir)
-            .with_context(|| format!("failed to unpack archive into {}", dest_dir.display()))?;
+        crate::extract::unpack_tar(reader, dest_dir, shown_prefix, &mut |_| true, ext)?;
     }
     Ok(())
 }
@@ -129,7 +127,12 @@ pub fn unpack_tar<R: Read>(
 /// Reconstruct the original directory tree from a dedup archive that has
 /// already been unpacked into `staging_dir`, placing the result at
 /// `dest_dir`. `staging_dir` is left behind for the caller to clean up.
-pub fn resolve_dedup_tree(staging_dir: &Path, dest_dir: &Path) -> Result<()> {
+pub fn resolve_dedup_tree(
+    staging_dir: &Path,
+    dest_dir: &Path,
+    shown_prefix: &str,
+    ext: &mut crate::extract::Extracted,
+) -> Result<()> {
     let manifest_path = staging_dir.join(MANIFEST_ENTRY);
     let manifest_bytes = fs::read(&manifest_path)
         .with_context(|| format!("missing dedup manifest at {}", manifest_path.display()))?;
@@ -138,16 +141,17 @@ pub fn resolve_dedup_tree(staging_dir: &Path, dest_dir: &Path) -> Result<()> {
 
     fs::create_dir_all(dest_dir)?;
     for dir in &manifest.dirs {
-        fs::create_dir_all(dest_dir.join(dir))
-            .with_context(|| format!("failed to create directory {dir}"))?;
+        let dest = crate::archive::safe_join(dest_dir, dir)?;
+        fs::create_dir_all(&dest).with_context(|| format!("failed to create directory {dir}"))?;
+        ext.add_dir(&dest);
     }
 
     for entry in &manifest.files {
-        let object_path = staging_dir.join(OBJECTS_DIR).join(&entry.hash);
-        let dest_path = dest_dir.join(&entry.path);
-        if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent)?;
+        if !crate::archive::is_object_hash(&entry.hash) {
+            bail!("corrupt dedup manifest: invalid object id {:?}", entry.hash);
         }
+        let object_path = staging_dir.join(OBJECTS_DIR).join(&entry.hash);
+        let dest_path = crate::archive::safe_join(dest_dir, &entry.path)?;
         fs::copy(&object_path, &dest_path).with_context(|| {
             format!(
                 "failed to restore {} from object {}",
@@ -155,6 +159,11 @@ pub fn resolve_dedup_tree(staging_dir: &Path, dest_dir: &Path) -> Result<()> {
             )
         })?;
         set_unix_mode(&dest_path, entry.mode)?;
+        ext.add_file(
+            &dest_path,
+            &format!("{shown_prefix}{}", entry.path),
+            entry.mode,
+        );
     }
 
     Ok(())

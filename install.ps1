@@ -11,14 +11,18 @@
 $ErrorActionPreference = "Stop"
 
 $Repo = "marcdomain/vaqum"
-$Target = "x86_64-pc-windows-msvc"
 $InstallDir = if ($env:VAQUM_INSTALL_DIR) { $env:VAQUM_INSTALL_DIR } else { "$env:LOCALAPPDATA\vaqum\bin" }
 
 function Say($msg) { Write-Host "vaqum: $msg" }
 function Die($msg) { Write-Error "vaqum: error: $msg"; exit 1 }
 
-if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
-  Die "unsupported architecture: $env:PROCESSOR_ARCHITECTURE (only x86_64 has a prebuilt Windows binary; try 'cargo install vaqum')"
+# PROCESSOR_ARCHITEW6432 is set when a 32-bit/emulated shell runs on a
+# 64-bit OS; it holds the machine's real architecture.
+$Arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+$Target = switch ($Arch) {
+  "AMD64" { "x86_64-pc-windows-msvc" }
+  "ARM64" { "aarch64-pc-windows-msvc" }
+  default { Die "unsupported architecture: $Arch (prebuilt Windows binaries exist for x64 and ARM64; try 'cargo install vaqum')" }
 }
 
 $Version = $env:VAQUM_VERSION

@@ -41,8 +41,10 @@ detect_target() {
       esac
       ;;
     Linux)
+      # Static musl builds: run on any distro, glibc or musl (Alpine).
       case "$arch" in
-        x86_64) echo "x86_64-unknown-linux-gnu" ;;
+        x86_64 | amd64) echo "x86_64-unknown-linux-musl" ;;
+        aarch64 | arm64) echo "aarch64-unknown-linux-musl" ;;
         *) die "unsupported Linux architecture: $arch (try 'cargo install vaqum' instead)" ;;
       esac
       ;;
@@ -66,7 +68,18 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
 say "downloading ${asset} (v${version}, ${target})..."
-curl -fsSL "$url" -o "$work_dir/$asset" || die "failed to download $url"
+if ! curl -fsSL "$url" -o "$work_dir/$asset"; then
+  # Releases up to 1.2.5 shipped a glibc build for x86_64 Linux instead.
+  if [ "$target" = "x86_64-unknown-linux-musl" ]; then
+    target="x86_64-unknown-linux-gnu"
+    asset="vaqum-${version}-${target}.tar.gz"
+    url="https://github.com/${REPO}/releases/download/v${version}/${asset}"
+    say "no static build for v${version}, trying ${asset}..."
+    curl -fsSL "$url" -o "$work_dir/$asset" || die "failed to download $url"
+  else
+    die "failed to download $url"
+  fi
+fi
 curl -fsSL "${url}.sha256" -o "$work_dir/$asset.sha256" || die "failed to download checksum"
 
 say "verifying checksum..."

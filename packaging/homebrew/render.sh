@@ -39,7 +39,7 @@ class Vaqum < Formula
   end
 
   on_linux do
-    url "https://github.com/marcdomain/vaqum/releases/download/v${version}/vaqum-${version}-x86_64-unknown-linux-gnu.tar.gz"
+    url "https://github.com/marcdomain/vaqum/releases/download/v${version}/vaqum-${version}-x86_64-unknown-linux-musl.tar.gz"
     sha256 "${sha_linux}"
   end
 

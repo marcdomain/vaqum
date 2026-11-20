@@ -17,7 +17,8 @@ Or in one line: `brew install marcdomain/vaqum/vaqum`.
 
 ```sh
 vaqum compress <path>... [-o out] [-l 1-22] [--max] [-r] [--dedup] [--exclude <pattern>] [--profile <name>] [-v] [-e] [--key-file <f>] [-q]
-vaqum decompress <path.vaqum|.zip|.tar.gz> [-o dir] [--verify] [--key-file <f>] [--max-ratio <n>] [--force] [-q]
+vaqum decompress <archive.vqm|.zip|.tar.gz|-> [-o dir|-] [--only <path>]... [--verify] [--key-file <f>] [--max-ratio <n>] [--force] [-q]
+vaqum list <archive> [--json] [--key-file <f>]                    # alias: ls
 vaqum diff <a> <b> [--html report.html] [--open] [--editor]
 vaqum dedupe <dir> [--link] [-q]
 vaqum search <pattern> [path] [-i] [-E]
@@ -31,7 +32,11 @@ vaqum config <show|path|init>
 
 `config` persists `compress` defaults and named profiles (`--profile <name>`) at `~/.config/vaqum/config.toml`; `config init` scaffolds one, `config show` prints what's resolved. CLI flags always win over a profile, which wins over the config file's defaults.
 
-`info` also works on a plain file or directory (not just `.vaqum` archives), showing size, checksum, and timestamps.
+`list` shows what's inside an archive without extracting it; `decompress --only <path>` (repeatable) extracts just those files or folders. Use `-` for stdin/stdout to pipe data through: `cat data.csv | vaqum compress - > data.vqm`, `vaqum decompress backup.vqm -o - | tar x`.
+
+Archives use the `.vqm` extension; files from older versions named `.vaqum` still open (archives are detected by content, not name).
+
+`info` also works on a plain file or directory (not just `.vqm` archives), showing size, checksum, and timestamps.
 
 `decompress`/`info` also read `.zip` and `.tar.gz`/`.tgz` (detected by content) as a convenience — read-only; vaqum's own format is the only supported output.
 

@@ -1,19 +1,13 @@
-mod bomb;
-mod cli;
-mod codec;
-mod commands;
-mod config;
-mod crypto;
-mod dedup;
-mod exclude;
-mod foreign;
-mod format;
-mod progress;
-mod util;
-
 use clap::Parser;
 
-use cli::{Cli, Command};
+// musl's built-in allocator is slow under heavy multithreading (zstd's
+// worker threads), so the static Linux builds use mimalloc instead.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+use vaqum::cli::{Cli, Command};
+use vaqum::commands;
 
 fn main() {
     let cli = Cli::parse();
@@ -21,6 +15,7 @@ fn main() {
     match cli.command {
         Command::Compress(args) => exit_on_result(commands::compress::run(args)),
         Command::Decompress(args) => exit_on_result(commands::decompress::run(args)),
+        Command::List(args) => exit_on_result(commands::list::run(args)),
         Command::Shred(args) => exit_on_result(commands::shred::run(args)),
         Command::Info(args) => exit_on_result(commands::info::run(args)),
         Command::Dedupe(args) => exit_on_result(commands::dedupe::run(args)),

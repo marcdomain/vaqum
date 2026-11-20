@@ -1,0 +1,38 @@
+[package]
+name = "vaqum-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tempfile = "3"
+vaqum = { path = ".." }
+
+# Kept out of the main crate's build: run with `cargo +nightly fuzz run <target>`.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "archive"
+path = "fuzz_targets/archive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tar_extract"
+path = "fuzz_targets/tar_extract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "names"
+path = "fuzz_targets/names.rs"
+test = false
+doc = false
+bench = false

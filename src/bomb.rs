@@ -19,6 +19,20 @@ pub fn check(
     max_ratio: f64,
     force: bool,
 ) -> Result<()> {
+    check_ratio(original_size, compressed_size, max_ratio, force)?;
+    if !force {
+        check_disk_space(original_size, dest_dir)?;
+    }
+    Ok(())
+}
+
+/// Refuses implausible expansion ratios (likely decompression bombs).
+pub fn check_ratio(
+    original_size: u64,
+    compressed_size: u64,
+    max_ratio: f64,
+    force: bool,
+) -> Result<()> {
     let ratio = if compressed_size > 0 {
         original_size as f64 / compressed_size as f64
     } else {
@@ -53,14 +67,10 @@ pub fn check(
         );
     }
 
-    if !force {
-        check_disk_space(original_size, dest_dir)?;
-    }
-
     Ok(())
 }
 
-fn check_disk_space(original_size: u64, dest_dir: &Path) -> Result<()> {
+pub fn check_disk_space(original_size: u64, dest_dir: &Path) -> Result<()> {
     let dir = if dest_dir.exists() {
         dest_dir.to_path_buf()
     } else {

@@ -6,7 +6,8 @@
 //! version        1 byte    format version (currently 2)
 //! entry_type     1 byte    0 = single file, 1 = directory archive (tar)
 //! algorithm      1 byte    0 = zstd, 1 = xz/LZMA
-//! flags          1 byte    bit 0 = dedup enabled, bit 1 = encrypted
+//! flags          1 byte    bit 0 = dedup enabled, bit 1 = encrypted,
+//!                          bit 2 = strong key derivation (see crypto.rs)
 //! original_size  8 bytes   uncompressed size of the payload (file bytes, or
 //!                          tar-stream bytes for a directory archive)
 //! checksum       32 bytes  SHA-256 of the uncompressed payload
@@ -32,6 +33,7 @@ pub const VERSION: u8 = 2;
 
 pub const FLAG_DEDUP: u8 = 0b0000_0001;
 pub const FLAG_ENCRYPTED: u8 = 0b0000_0010;
+pub const FLAG_STRONG_KDF: u8 = 0b0000_0100;
 
 const SALT_LEN: usize = crate::crypto::SALT_LEN;
 const NONCE_PREFIX_LEN: usize = crate::crypto::NONCE_PREFIX_LEN;
@@ -103,6 +105,9 @@ pub struct Header {
     pub algorithm: Algorithm,
     pub dedup: bool,
     pub encrypted: bool,
+    /// Key derived with the stronger Argon2id settings (set on every
+    /// archive encrypted by this version; older archives use the defaults).
+    pub strong_kdf: bool,
     pub original_size: u64,
     pub checksum: [u8; 32],
     pub salt: [u8; SALT_LEN],
@@ -119,6 +124,9 @@ impl Header {
         let mut flags = if self.dedup { FLAG_DEDUP } else { 0 };
         if self.encrypted {
             flags |= FLAG_ENCRYPTED;
+        }
+        if self.strong_kdf {
+            flags |= FLAG_STRONG_KDF;
         }
         w.write_all(&[flags])?;
         w.write_all(&self.original_size.to_le_bytes())?;
@@ -153,6 +161,7 @@ impl Header {
         let flags = fixed[7];
         let dedup = flags & FLAG_DEDUP != 0;
         let encrypted = flags & FLAG_ENCRYPTED != 0;
+        let strong_kdf = flags & FLAG_STRONG_KDF != 0;
 
         let mut original_size_bytes = [0u8; 8];
         original_size_bytes.copy_from_slice(&fixed[8..16]);
@@ -175,12 +184,19 @@ impl Header {
         r.read_exact(&mut name_buf)
             .context("failed to read vaqum header name field")?;
         let name = String::from_utf8(name_buf).context("vaqum header name is not valid UTF-8")?;
+        if !is_plain_name(&name) {
+            bail!(
+                "refusing to open this archive: its stored name {name:?} isn't a plain file name \
+                 (it could write outside the output directory)"
+            );
+        }
 
         Ok(Header {
             entry_type,
             algorithm,
             dedup,
             encrypted,
+            strong_kdf,
             original_size,
             checksum,
             salt,
@@ -191,6 +207,51 @@ impl Header {
 
     pub fn on_disk_len(&self) -> u64 {
         FIXED_LEN as u64 + self.name.len() as u64
+    }
+}
+
+/// The stored name is joined onto the output directory on decompress, so
+/// it must be a single, ordinary path component: no separators, no `..`.
+fn is_plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(['/', '\\', '\0'])
+        && name != "."
+        && name != ".."
+        && std::path::Path::new(name).components().count() == 1
+        && matches!(
+            std::path::Path::new(name).components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+}
+
+/// Errors if more bytes come out of a decoder than the archive header
+/// promised. The header's size drives the decompression-bomb and
+/// disk-space checks, so a lying header must not get past them.
+pub struct SizeLimitReader<R: Read> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R: Read> SizeLimitReader<R> {
+    pub fn new(inner: R, limit: u64) -> Self {
+        Self {
+            inner,
+            remaining: limit,
+        }
+    }
+}
+
+impl<R: Read> Read for SizeLimitReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n as u64 > self.remaining {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "archive decompresses to more data than its header claims (possible decompression bomb); refusing to continue",
+            ));
+        }
+        self.remaining -= n as u64;
+        Ok(n)
     }
 }
 
@@ -251,6 +312,46 @@ impl<W: Write> Write for HashingWriter<W> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.inner.flush()
+    }
+}
+
+/// A `Read` wrapper that hashes (SHA-256) and counts every byte read
+/// through it. Hashing can be switched off so callers that don't need a
+/// checksum don't pay for one.
+pub struct HashingReader<R: Read> {
+    inner: R,
+    hasher: Option<sha2::Sha256>,
+    count: u64,
+}
+
+impl<R: Read> HashingReader<R> {
+    pub fn new(inner: R, enabled: bool) -> Self {
+        Self {
+            inner,
+            hasher: enabled.then(sha2::Digest::new),
+            count: 0,
+        }
+    }
+
+    /// Byte count and SHA-256 digest of everything read so far (the digest
+    /// is all zeros if hashing was disabled).
+    pub fn stats(self) -> (u64, [u8; 32]) {
+        let digest = self
+            .hasher
+            .map(|h| sha2::Digest::finalize(h).into())
+            .unwrap_or([0u8; 32]);
+        (self.count, digest)
+    }
+}
+
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if let Some(h) = &mut self.hasher {
+            sha2::Digest::update(h, &buf[..n]);
+        }
+        self.count += n as u64;
+        Ok(n)
     }
 }
 

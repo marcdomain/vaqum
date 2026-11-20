@@ -40,7 +40,7 @@ jobs:
     outputs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -82,11 +82,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --verbose
@@ -108,14 +109,19 @@ jobs:
           declare -A ALL_TARGETS=(
             [x86_64-apple-darwin]=macos-latest
             [aarch64-apple-darwin]=macos-latest
-            [x86_64-unknown-linux-gnu]=ubuntu-latest
+            [x86_64-unknown-linux-musl]=ubuntu-latest
             [aarch64-unknown-linux-musl]=ubuntu-latest
             [aarch64-linux-android]=ubuntu-latest
             [x86_64-pc-windows-msvc]=windows-latest
+            # Cross-compiled with the ARM64 MSVC tools on the x64 runner.
+            [aarch64-pc-windows-msvc]=windows-latest
           )
           # Targets that don't run natively on their runner's arch need
           # cross-rs/cross (Docker-based) instead of plain `cargo build`.
+          # Linux builds are static musl binaries, so they run on any distro
+          # (glibc or musl/Alpine, old or new).
           declare -A CROSS_TARGETS=(
+            [x86_64-unknown-linux-musl]=1
             [aarch64-unknown-linux-musl]=1
             [aarch64-linux-android]=1
           )
@@ -168,19 +174,22 @@ jobs:
         include: ${{ fromJson(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ${{ matrix.target }}
 
       - name: Install cross
         if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+        # Pinned to a reviewed commit: an unpinned install would build
+        # releases with whatever lands on cross's main branch.
+        run: cargo install cross --git https://github.com/cross-rs/cross --rev a9301e91f72bba3850460512685f6b16062015ff --locked
 
       - name: Build release binary
         run: |
@@ -220,7 +229,7 @@ jobs:
           tar -czf "$archive" -C "$stage" .
           sha256 "$archive" > "${archive}.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vaqum-${{ matrix.target }}
           path: |
@@ -234,14 +243,24 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
 
+      # Signed build provenance: anyone can check a downloaded binary was
+      # built by this workflow from this repo with
+      #   gh attestation verify <file> --repo marcdomain/vaqum
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/vaqum-*
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: v${{ needs.verify-branch.outputs.version }}
           files: dist/*
@@ -258,9 +277,9 @@ jobs:
       run:
         working-directory: npm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -277,7 +296,7 @@ jobs:
       - name: Test npm package
         run: npm test
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
@@ -332,9 +351,9 @@ jobs:
     # See packaging/homebrew/README.md for the tap's one-time setup.
     if: needs.plan.outputs.do_homebrew == 'true' && needs.check-homebrew-secret.outputs.has-token == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
@@ -346,7 +365,7 @@ jobs:
           set -euo pipefail
           sha_arm="$(cut -d' ' -f1 "dist/vaqum-${VERSION}-aarch64-apple-darwin.tar.gz.sha256")"
           sha_intel="$(cut -d' ' -f1 "dist/vaqum-${VERSION}-x86_64-apple-darwin.tar.gz.sha256")"
-          sha_linux="$(cut -d' ' -f1 "dist/vaqum-${VERSION}-x86_64-unknown-linux-gnu.tar.gz.sha256")"
+          sha_linux="$(cut -d' ' -f1 "dist/vaqum-${VERSION}-x86_64-unknown-linux-musl.tar.gz.sha256")"
           ./packaging/homebrew/render.sh "$VERSION" "$sha_intel" "$sha_arm" "$sha_linux" > vaqum.rb
 
       - name: Push to homebrew-vaqum tap

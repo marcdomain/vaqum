@@ -47,7 +47,7 @@ fn compress_decompress_single_file_round_trips_byte_for_byte() {
         .assert()
         .success();
 
-    let archive = dir.path().join("original.txt.vaqum");
+    let archive = dir.path().join("original.txt.vqm");
     assert!(archive.exists(), "compressed archive should be created");
 
     let out_dir = dir.path().join("out");
@@ -77,7 +77,7 @@ fn compress_max_uses_xz_and_round_trips() {
     let dir = TempDir::new().unwrap();
     let input = dir.path().join("original.txt");
     write_sample_text(&input, 2000);
-    let archive = dir.path().join("out.vaqum");
+    let archive = dir.path().join("out.vqm");
 
     vaqum()
         .args([
@@ -128,7 +128,7 @@ fn dry_run_reports_stats_but_writes_no_output() {
         .stdout(predicate::str::contains("dry run"));
 
     assert!(
-        !dir.path().join("original.txt.vaqum").exists(),
+        !dir.path().join("original.txt.vqm").exists(),
         "--dry-run must not write an output file"
     );
 }
@@ -143,7 +143,7 @@ fn compress_and_decompress_progress_bar_is_suppressed_when_piped() {
     let input = dir.path().join("original.txt");
     write_sample_text(&input, 500);
 
-    let archive = dir.path().join("original.txt.vaqum");
+    let archive = dir.path().join("original.txt.vqm");
     vaqum()
         .args(["compress", input.to_str().unwrap()])
         .assert()
@@ -172,7 +172,7 @@ fn compress_and_decompress_accept_quiet_flag() {
     let input = dir.path().join("original.txt");
     write_sample_text(&input, 500);
 
-    let archive = dir.path().join("original.txt.vaqum");
+    let archive = dir.path().join("original.txt.vqm");
     vaqum()
         .args(["compress", input.to_str().unwrap(), "-q"])
         .assert()
@@ -210,7 +210,7 @@ fn compress_decompress_directory_round_trips() {
     let src = dir.path().join("src_tree");
     build_sample_tree(&src);
 
-    let archive = dir.path().join("tree.vaqum");
+    let archive = dir.path().join("tree.vqm");
     vaqum()
         .args([
             "compress",
@@ -243,8 +243,8 @@ fn compress_decompress_directory_with_dedup_round_trips_and_shrinks() {
     let src = dir.path().join("src_tree");
     build_sample_tree(&src);
 
-    let plain_archive = dir.path().join("plain.vaqum");
-    let dedup_archive = dir.path().join("dedup.vaqum");
+    let plain_archive = dir.path().join("plain.vqm");
+    let dedup_archive = dir.path().join("dedup.vqm");
 
     vaqum()
         .args([
@@ -310,7 +310,7 @@ fn compress_multiple_files_bundles_without_requiring_recursive() {
     write_sample_text(&a, 50);
     write_sample_text(&b, 30);
 
-    let archive = dir.path().join("bundle.vaqum");
+    let archive = dir.path().join("bundle.vqm");
     vaqum()
         .args([
             "compress",
@@ -358,7 +358,7 @@ fn compress_mixed_files_and_directory_requires_recursive_and_round_trips() {
     let src = dir.path().join("src_tree");
     build_sample_tree(&src);
 
-    let archive = dir.path().join("mixed.vaqum");
+    let archive = dir.path().join("mixed.vqm");
 
     // A directory among the inputs still requires -r, same as a single
     // directory would.
@@ -436,7 +436,7 @@ fn compress_multiple_paths_with_clashing_basenames_fails() {
             dir_a.join("same.txt").to_str().unwrap(),
             dir_b.join("same.txt").to_str().unwrap(),
             "-o",
-            dir.path().join("out.vaqum").to_str().unwrap(),
+            dir.path().join("out.vqm").to_str().unwrap(),
         ])
         .assert()
         .failure()
@@ -459,7 +459,7 @@ fn compress_multiple_paths_rejects_dedup() {
             "-r",
             "--dedup",
             "-o",
-            dir.path().join("out.vaqum").to_str().unwrap(),
+            dir.path().join("out.vqm").to_str().unwrap(),
         ])
         .assert()
         .failure()
@@ -485,7 +485,7 @@ fn compress_exclude_flag_skips_matching_dir_and_file_pattern() {
     let src = dir.path().join("proj");
     build_excludable_tree(&src);
 
-    let archive = dir.path().join("out.vaqum");
+    let archive = dir.path().join("out.vqm");
     vaqum()
         .args([
             "compress",
@@ -527,7 +527,7 @@ fn compress_vaqumignore_file_is_auto_discovered() {
     build_excludable_tree(&src);
     fs::write(src.join(".vaqumignore"), "node_modules/\n*.log\n").unwrap();
 
-    let archive = dir.path().join("out.vaqum");
+    let archive = dir.path().join("out.vqm");
     vaqum()
         .args([
             "compress",
@@ -574,7 +574,7 @@ fn compress_exclude_directory_pattern_does_not_match_a_same_named_file() {
     fs::create_dir_all(src.join("docs")).unwrap();
     write_sample_text(&src.join("docs/target"), 5);
 
-    let archive = dir.path().join("out.vaqum");
+    let archive = dir.path().join("out.vqm");
     vaqum()
         .args([
             "compress",
@@ -612,15 +612,15 @@ fn compress_trailing_slash_on_input_path_is_normalized() {
     let mut src_with_slash = src.to_str().unwrap().to_string();
     src_with_slash.push('/');
 
-    // No -o given: the default output name must be "proj.vaqum", not
-    // corrupted into "proj/.vaqum" by the trailing slash.
+    // No -o given: the default output name must be "proj.vqm", not
+    // corrupted into "proj/.vqm" by the trailing slash.
     vaqum()
         .current_dir(dir.path())
         .args(["compress", &src_with_slash, "-r"])
         .assert()
         .success();
 
-    assert!(dir.path().join("proj.vaqum").exists());
+    assert!(dir.path().join("proj.vqm").exists());
 }
 
 fn assert_trees_equal(a: &std::path::Path, b: &std::path::Path) {
@@ -694,7 +694,7 @@ fn info_reports_algorithm_and_sizes() {
     let dir = TempDir::new().unwrap();
     let input = dir.path().join("original.txt");
     write_sample_text(&input, 1000);
-    let archive = dir.path().join("original.txt.vaqum");
+    let archive = dir.path().join("original.txt.vqm");
 
     vaqum()
         .args(["compress", input.to_str().unwrap()])
@@ -772,7 +772,7 @@ fn compress_directory_without_recursive_flag_fails() {
 #[test]
 fn decompress_rejects_non_vaqum_file() {
     let dir = TempDir::new().unwrap();
-    let bogus = dir.path().join("bogus.vaqum");
+    let bogus = dir.path().join("bogus.vqm");
     fs::write(&bogus, b"not a vaqum archive").unwrap();
 
     vaqum()
@@ -979,7 +979,7 @@ fn diff_vaqum_archive_against_plain_file_transparently_decompresses() {
     let dir = TempDir::new().unwrap();
     let original = dir.path().join("original.txt");
     write_sample_text(&original, 50);
-    let archive = dir.path().join("original.txt.vaqum");
+    let archive = dir.path().join("original.txt.vqm");
     vaqum()
         .args(["compress", original.to_str().unwrap()])
         .assert()
@@ -1001,7 +1001,7 @@ fn diff_dedup_archive_against_live_directory_transparently_resolves() {
     let dir = TempDir::new().unwrap();
     let src = dir.path().join("src_tree");
     build_sample_tree(&src);
-    let archive = dir.path().join("tree.vaqum");
+    let archive = dir.path().join("tree.vqm");
     vaqum()
         .args([
             "compress",
@@ -1094,7 +1094,7 @@ fn diff_editor_on_vaqum_archive_uses_a_scratch_copy() {
     let dir = TempDir::new().unwrap();
     let original = dir.path().join("original.txt");
     write_sample_text(&original, 20);
-    let archive = dir.path().join("original.txt.vaqum");
+    let archive = dir.path().join("original.txt.vqm");
     vaqum()
         .args(["compress", original.to_str().unwrap()])
         .assert()
@@ -1128,7 +1128,7 @@ fn diff_editor_on_vaqum_archive_uses_a_scratch_copy() {
 
     let log_contents = fs::read_to_string(&log).unwrap();
     assert!(log_contents.contains("--diff"));
-    // The archive side must NOT be opened at its own .vaqum path (that's
+    // The archive side must NOT be opened at its own .vqm path (that's
     // compressed bytes, not text) — it should be a materialized scratch
     // file elsewhere.
     assert!(!log_contents.contains(archive.to_str().unwrap()));
@@ -1569,7 +1569,7 @@ fn compress_applies_config_defaults_exclude_without_a_profile() {
     fs::write(src.join("keep.txt"), "kept\n").unwrap();
     fs::write(src.join("skip.log"), "skipped\n").unwrap();
 
-    let archive = dir.path().join("out.vaqum");
+    let archive = dir.path().join("out.vqm");
     vaqum()
         .args([
             "compress",
@@ -1616,7 +1616,7 @@ fn compress_profile_flag_merges_with_defaults_and_applies_max() {
     fs::write(src.join("skip.log"), "skipped\n").unwrap();
     fs::write(src.join("skip.tmp"), "skipped\n").unwrap();
 
-    let archive = dir.path().join("out.vaqum");
+    let archive = dir.path().join("out.vqm");
     vaqum()
         .args([
             "compress",
@@ -1800,6 +1800,1397 @@ fn decompress_rejects_a_plain_non_archive_file_with_a_clear_error() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "is not a .vaqum, zip, or tar.gz archive",
+            "is not a .vqm, zip, or tar.gz archive",
         ));
+}
+
+// ---------------------------------------------------------------------
+// list
+// ---------------------------------------------------------------------
+
+/// Compress `build_sample_tree` into an archive and return its path.
+fn sample_archive(dir: &std::path::Path, extra: &[&str]) -> std::path::PathBuf {
+    let src = dir.join("src_tree");
+    if !src.exists() {
+        build_sample_tree(&src);
+    }
+    let label = extra
+        .first()
+        .map(|s| s.trim_start_matches('-'))
+        .unwrap_or("plain");
+    let archive = dir.join(format!("sample-{label}.vqm"));
+    let mut args = vec![
+        "compress",
+        src.to_str().unwrap(),
+        "-r",
+        "-o",
+        archive.to_str().unwrap(),
+    ];
+    args.extend_from_slice(extra);
+    vaqum().args(&args).assert().success();
+    archive
+}
+
+fn list_json(archive: &std::path::Path, extra: &[&str]) -> serde_json::Value {
+    let mut args = vec!["list", "--json", archive.to_str().unwrap()];
+    args.extend_from_slice(extra);
+    let output = vaqum().args(&args).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+fn listed_paths(listing: &serde_json::Value) -> Vec<String> {
+    listing["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["path"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn list_directory_archive_shows_paths_under_the_archive_name() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    vaqum()
+        .args(["list", archive.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src_tree/a.txt"))
+        .stdout(predicate::str::contains("src_tree/nested/c.txt"))
+        .stdout(predicate::str::contains("src_tree/nested/"))
+        .stdout(predicate::str::contains("3 files, 1 directory"));
+}
+
+#[test]
+fn list_ls_alias_works() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    vaqum()
+        .args(["ls", archive.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src_tree/a.txt"));
+}
+
+#[test]
+fn list_json_reports_entries_kinds_and_sizes() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let listing = list_json(&archive, &[]);
+    assert_eq!(listing["format"], "vaqum");
+    assert_eq!(listing["kind"], "directory archive");
+    assert_eq!(listing["files"], 3);
+    assert_eq!(listing["dirs"], 1);
+    let a_size = fs::metadata(dir.path().join("src_tree/a.txt"))
+        .unwrap()
+        .len();
+    let a = listing["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == "src_tree/a.txt")
+        .unwrap();
+    assert_eq!(a["kind"], "file");
+    assert_eq!(a["size"], a_size);
+}
+
+#[test]
+fn list_dedup_archive_shows_real_paths_not_internal_objects() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &["--dedup"]);
+    let listing = list_json(&archive, &[]);
+    let mut paths = listed_paths(&listing);
+    paths.sort();
+    assert_eq!(
+        paths,
+        [
+            "src_tree/a.txt",
+            "src_tree/b.txt",
+            "src_tree/nested",
+            "src_tree/nested/c.txt"
+        ]
+    );
+    // b.txt is a duplicate of a.txt but still reports its real size.
+    let sizes: Vec<u64> = listing["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["path"] == "src_tree/a.txt" || e["path"] == "src_tree/b.txt")
+        .map(|e| e["size"].as_u64().unwrap())
+        .collect();
+    assert_eq!(sizes.len(), 2);
+    assert_eq!(sizes[0], sizes[1]);
+    assert!(sizes[0] > 0);
+}
+
+#[test]
+fn list_encrypted_archive_needs_the_right_key() {
+    let dir = TempDir::new().unwrap();
+    let key = dir.path().join("key.bin");
+    fs::write(&key, b"correct horse battery staple").unwrap();
+    let archive = sample_archive(dir.path(), &["--key-file", key.to_str().unwrap()]);
+
+    let listing = list_json(&archive, &["--key-file", key.to_str().unwrap()]);
+    assert_eq!(listing["encrypted"], true);
+    assert!(listed_paths(&listing).contains(&"src_tree/a.txt".to_string()));
+
+    let wrong = dir.path().join("wrong.bin");
+    fs::write(&wrong, b"nope").unwrap();
+    vaqum()
+        .args([
+            "list",
+            archive.to_str().unwrap(),
+            "--key-file",
+            wrong.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn list_single_file_archive_shows_the_one_file() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("notes.txt");
+    write_sample_text(&input, 100);
+    vaqum()
+        .args(["compress", input.to_str().unwrap()])
+        .assert()
+        .success();
+    let listing = list_json(&dir.path().join("notes.txt.vqm"), &[]);
+    assert_eq!(listed_paths(&listing), ["notes.txt"]);
+    assert_eq!(
+        listing["entries"][0]["size"],
+        fs::metadata(&input).unwrap().len()
+    );
+}
+
+#[test]
+fn list_reads_tar_gz_archives() {
+    let dir = TempDir::new().unwrap();
+    let tgz = dir.path().join("t.tar.gz");
+    {
+        let enc = flate2::write::GzEncoder::new(
+            fs::File::create(&tgz).unwrap(),
+            flate2::Compression::default(),
+        );
+        let mut builder = tar::Builder::new(enc);
+        let data = b"hello";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "dir/hello.txt", &data[..])
+            .unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+    }
+    let listing = list_json(&tgz, &[]);
+    assert_eq!(listing["format"], "tar.gz");
+    assert_eq!(listed_paths(&listing), ["dir/hello.txt"]);
+}
+
+#[test]
+fn list_rejects_a_non_archive() {
+    let dir = TempDir::new().unwrap();
+    let f = dir.path().join("plain.txt");
+    fs::write(&f, "just text").unwrap();
+    vaqum()
+        .args(["list", f.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is not a .vqm"));
+}
+
+// ---------------------------------------------------------------------
+// decompress --only
+// ---------------------------------------------------------------------
+
+#[test]
+fn only_extracts_just_the_named_file() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let out = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "src_tree/nested/c.txt",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Extracted 1 file"));
+    assert_eq!(walk_relative(&out), ["src_tree/nested/c.txt"]);
+    assert_eq!(
+        fs::read(out.join("src_tree/nested/c.txt")).unwrap(),
+        fs::read(dir.path().join("src_tree/nested/c.txt")).unwrap()
+    );
+}
+
+#[test]
+fn only_accepts_paths_without_the_archive_name_prefix() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let out = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "./a.txt",
+        ])
+        .assert()
+        .success();
+    assert_eq!(walk_relative(&out), ["src_tree/a.txt"]);
+}
+
+#[test]
+fn only_with_a_directory_extracts_everything_inside_it() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let out = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "src_tree/nested/",
+            "--only",
+            "src_tree/b.txt",
+        ])
+        .assert()
+        .success();
+    let mut files = walk_relative(&out);
+    files.sort();
+    assert_eq!(files, ["src_tree/b.txt", "src_tree/nested/c.txt"]);
+}
+
+#[test]
+fn only_fails_clearly_when_a_path_is_not_in_the_archive() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let out = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "src_tree/missing.txt",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "nothing in the archive matches: src_tree/missing.txt",
+        ))
+        .stderr(predicate::str::contains("vaqum list"));
+}
+
+#[test]
+fn only_with_verify_still_checks_the_whole_archive() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let out = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "src_tree/a.txt",
+            "--verify",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("verified checksum"));
+    assert_eq!(walk_relative(&out), ["src_tree/a.txt"]);
+}
+
+#[test]
+fn only_works_on_dedup_archives_including_duplicates() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &["--dedup"]);
+    let out = dir.path().join("out");
+    // b.txt's content is stored once, under a.txt's object.
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "src_tree/b.txt",
+            "--verify",
+        ])
+        .assert()
+        .success();
+    assert_eq!(walk_relative(&out), ["src_tree/b.txt"]);
+    assert_eq!(
+        fs::read(out.join("src_tree/b.txt")).unwrap(),
+        fs::read(dir.path().join("src_tree/b.txt")).unwrap()
+    );
+}
+
+#[test]
+fn only_works_on_multi_path_bundles() {
+    let dir = TempDir::new().unwrap();
+    let one = dir.path().join("one.txt");
+    let two = dir.path().join("two.txt");
+    write_sample_text(&one, 50);
+    write_sample_text(&two, 60);
+    let archive = dir.path().join("bundle.vqm");
+    vaqum()
+        .args([
+            "compress",
+            one.to_str().unwrap(),
+            two.to_str().unwrap(),
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let out = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "two.txt",
+        ])
+        .assert()
+        .success();
+    assert_eq!(walk_relative(&out), ["two.txt"]);
+}
+
+// ---------------------------------------------------------------------
+// stdin / stdout
+// ---------------------------------------------------------------------
+
+#[test]
+fn stdin_to_stdout_round_trips_and_keeps_status_off_stdout() {
+    let data: Vec<u8> = (0..200_000u32)
+        .flat_map(|i| (i % 251).to_le_bytes())
+        .collect();
+
+    let compressed = vaqum()
+        .args(["compress", "-"])
+        .write_stdin(data.clone())
+        .output()
+        .unwrap();
+    assert!(
+        compressed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compressed.stderr)
+    );
+    assert_eq!(
+        &compressed.stdout[..4],
+        b"VAQM",
+        "stdout must carry only the archive"
+    );
+    assert!(String::from_utf8_lossy(&compressed.stderr).contains("Compressed 'stdin' -> 'stdout'"));
+
+    let restored = vaqum()
+        .args(["decompress", "-", "-o", "-", "--verify"])
+        .write_stdin(compressed.stdout)
+        .output()
+        .unwrap();
+    assert!(
+        restored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restored.stderr)
+    );
+    assert_eq!(restored.stdout, data);
+    assert!(String::from_utf8_lossy(&restored.stderr).contains("verified checksum"));
+}
+
+#[test]
+fn stdin_compressed_to_a_file_is_named_after_the_output() {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("report.csv.vqm");
+    vaqum()
+        .args(["compress", "-", "-o", archive.to_str().unwrap()])
+        .write_stdin("a,b\n1,2\n")
+        .assert()
+        .success();
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(out.join("report.csv")).unwrap(),
+        "a,b\n1,2\n"
+    );
+}
+
+#[test]
+fn stdin_cannot_be_mixed_with_other_inputs() {
+    let dir = TempDir::new().unwrap();
+    let f = dir.path().join("f.txt");
+    fs::write(&f, "x").unwrap();
+    vaqum()
+        .args([
+            "compress",
+            "-",
+            f.to_str().unwrap(),
+            "-o",
+            dir.path().join("o.vqm").to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("can't be combined"));
+}
+
+#[test]
+fn encrypted_archive_round_trips_through_pipes_with_a_key_file() {
+    let dir = TempDir::new().unwrap();
+    let key = dir.path().join("key.bin");
+    fs::write(&key, b"pipe secret").unwrap();
+    let compressed = vaqum()
+        .args(["compress", "-", "--key-file", key.to_str().unwrap()])
+        .write_stdin("top secret payload")
+        .output()
+        .unwrap();
+    assert!(compressed.status.success());
+    let restored = vaqum()
+        .args([
+            "decompress",
+            "-",
+            "-o",
+            "-",
+            "--key-file",
+            key.to_str().unwrap(),
+        ])
+        .write_stdin(compressed.stdout)
+        .output()
+        .unwrap();
+    assert!(
+        restored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restored.stderr)
+    );
+    assert_eq!(restored.stdout, b"top secret payload");
+}
+
+#[test]
+fn directory_archive_to_stdout_is_a_plain_tar_stream() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let output = vaqum()
+        .args(["decompress", archive.to_str().unwrap(), "-o", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut tar = tar::Archive::new(output.stdout.as_slice());
+    let mut names: Vec<String> = tar
+        .entries()
+        .unwrap()
+        .map(|e| {
+            e.unwrap()
+                .path()
+                .unwrap()
+                .to_string_lossy()
+                .trim_end_matches('/')
+                .to_string()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, ["a.txt", "b.txt", "nested", "nested/c.txt"]);
+}
+
+#[test]
+fn dedup_archive_to_stdout_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &["--dedup"]);
+    vaqum()
+        .args(["decompress", archive.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("isn't supported for --dedup"));
+}
+
+#[test]
+fn list_reads_an_archive_from_stdin() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    vaqum()
+        .args(["list", "-"])
+        .write_stdin(fs::read(&archive).unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src_tree/nested/c.txt"));
+}
+
+// ---------------------------------------------------------------------
+// extension
+// ---------------------------------------------------------------------
+
+#[test]
+fn archives_with_the_old_vaqum_extension_still_work() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("old.txt");
+    write_sample_text(&input, 100);
+    let archive = dir.path().join("old.txt.vaqum");
+    vaqum()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--verify",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read(&input).unwrap(),
+        fs::read(out.join("old.txt")).unwrap()
+    );
+    vaqum()
+        .args(["list", archive.to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+// ---------------------------------------------------------------------
+// shred warning
+// ---------------------------------------------------------------------
+
+#[test]
+fn shred_warns_about_ssds_and_copy_on_write_before_confirming() {
+    let dir = TempDir::new().unwrap();
+    let f = dir.path().join("secret.txt");
+    fs::write(&f, "secret").unwrap();
+    vaqum()
+        .args(["shred", f.to_str().unwrap(), "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Copy-on-write filesystems"))
+        .stdout(predicate::str::contains("full-disk encryption"));
+    assert!(f.exists());
+}
+
+// ---------------------------------------------------------------------
+// security: hostile archives
+// ---------------------------------------------------------------------
+
+/// A raw `.vqm` header, so tests can build archives vaqum itself would
+/// never write.
+fn raw_header(entry_type: u8, flags: u8, original_size: u64, name: &str) -> Vec<u8> {
+    let mut h = Vec::new();
+    h.extend_from_slice(b"VAQM");
+    h.extend_from_slice(&[2, entry_type, 0, flags]);
+    h.extend_from_slice(&original_size.to_le_bytes());
+    h.extend_from_slice(&[0u8; 32 + 16 + 7]);
+    h.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    h.extend_from_slice(name.as_bytes());
+    h
+}
+
+fn write_raw_archive(
+    path: &std::path::Path,
+    entry_type: u8,
+    flags: u8,
+    size: u64,
+    name: &str,
+    payload: &[u8],
+) {
+    let mut bytes = raw_header(entry_type, flags, size, name);
+    bytes.extend(zstd::encode_all(payload, 3).unwrap());
+    fs::write(path, bytes).unwrap();
+}
+
+/// A dedup tar whose manifest maps `path` to an object with `hash`.
+fn dedup_tar_with(path: &str, hash: &str, data: &[u8]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut h = tar::Header::new_gnu();
+    h.set_size(data.len() as u64);
+    h.set_mode(0o644);
+    h.set_cksum();
+    builder
+        .append_data(&mut h, format!(".vaqum-objects/{}", "a".repeat(64)), data)
+        .unwrap();
+    let manifest =
+        serde_json::json!({ "dirs": [], "files": [{ "path": path, "hash": hash, "mode": null }] });
+    let m = serde_json::to_vec(&manifest).unwrap();
+    let mut h = tar::Header::new_gnu();
+    h.set_size(m.len() as u64);
+    h.set_mode(0o644);
+    h.set_cksum();
+    builder
+        .append_data(&mut h, ".vaqum-manifest.json", m.as_slice())
+        .unwrap();
+    builder.into_inner().unwrap()
+}
+
+#[test]
+fn archive_with_a_path_traversal_name_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("evil.vqm");
+    write_raw_archive(&archive, 0, 0, 6, "../escaped.txt", b"pwned\n");
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    for cmd in [
+        vec![
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ],
+        vec!["list", archive.to_str().unwrap()],
+    ] {
+        vaqum()
+            .args(&cmd)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("isn't a plain file name"));
+    }
+    assert!(
+        !dir.path().join("escaped.txt").exists(),
+        "file escaped the output directory"
+    );
+}
+
+#[test]
+fn archive_with_an_absolute_name_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("evil.vqm");
+    let target = dir.path().join("absolute-target.txt");
+    write_raw_archive(&archive, 0, 0, 6, target.to_str().unwrap(), b"pwned\n");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            dir.path().join("out").to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(!target.exists());
+}
+
+#[test]
+fn dedup_manifest_path_traversal_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let tar = dedup_tar_with("../escaped.txt", &"a".repeat(64), b"pwned\n");
+    let archive = dir.path().join("evil.vqm");
+    write_raw_archive(&archive, 1, 1, tar.len() as u64, "victim", &tar);
+    let out = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "points outside the output directory",
+        ));
+    assert!(!out.join("escaped.txt").exists());
+    assert!(!dir.path().join("escaped.txt").exists());
+    // --only goes through its own code path: must be refused too.
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "../escaped.txt",
+        ])
+        .assert()
+        .failure();
+    assert!(!out.join("escaped.txt").exists());
+}
+
+#[test]
+fn dedup_manifest_with_a_bogus_object_id_is_refused() {
+    let dir = TempDir::new().unwrap();
+    // The object id is used as a file name: "../../x" must not be followed.
+    let tar = dedup_tar_with("ok.txt", "../../../../etc/hosts", b"data");
+    let archive = dir.path().join("evil.vqm");
+    write_raw_archive(&archive, 1, 1, tar.len() as u64, "victim", &tar);
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            dir.path().join("out").to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid object id"));
+}
+
+#[test]
+fn archive_that_lies_about_its_size_is_stopped_and_leaves_nothing_behind() {
+    let dir = TempDir::new().unwrap();
+    let archive = dir.path().join("bomb.vqm");
+    // Claims 64 bytes, really 20 MB: would slip past the ratio and disk checks.
+    write_raw_archive(&archive, 0, 0, 64, "bomb.bin", &vec![0u8; 20 * 1024 * 1024]);
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("possible decompression bomb"));
+    assert_eq!(
+        fs::read_dir(&out).unwrap().count(),
+        0,
+        "no partial or temp files may remain"
+    );
+    vaqum()
+        .args(["decompress", archive.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("possible decompression bomb"));
+}
+
+#[test]
+fn zip_with_a_path_traversal_entry_cannot_escape() {
+    let dir = TempDir::new().unwrap();
+    let zip_path = dir.path().join("evil.zip");
+    {
+        let mut zip = zip::ZipWriter::new(fs::File::create(&zip_path).unwrap());
+        let opts: zip::write::SimpleFileOptions = Default::default();
+        zip.start_file("../escaped.txt", opts).unwrap();
+        zip.write_all(b"pwned\n").unwrap();
+        zip.finish().unwrap();
+    }
+    let out = dir.path().join("out");
+    let _ = vaqum()
+        .args([
+            "decompress",
+            zip_path.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !dir.path().join("escaped.txt").exists(),
+        "zip entry escaped the output directory"
+    );
+}
+
+#[test]
+fn tar_gz_with_a_path_traversal_entry_cannot_escape() {
+    let dir = TempDir::new().unwrap();
+    let tgz = dir.path().join("evil.tar.gz");
+    {
+        // Write the raw header by hand: the tar crate's builder refuses `..`.
+        let data = b"pwned\n";
+        let mut header = tar::Header::new_old();
+        header.as_old_mut().name[..14].copy_from_slice(b"../escaped.txt");
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_cksum();
+        let mut raw = header.as_bytes().to_vec();
+        raw.extend_from_slice(data);
+        raw.resize(512 * 2, 0);
+        raw.extend_from_slice(&[0u8; 1024]);
+        let mut enc = flate2::write::GzEncoder::new(
+            fs::File::create(&tgz).unwrap(),
+            flate2::Compression::default(),
+        );
+        enc.write_all(&raw).unwrap();
+        enc.finish().unwrap();
+    }
+    let out = dir.path().join("out");
+    let _ = vaqum()
+        .args([
+            "decompress",
+            tgz.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !dir.path().join("escaped.txt").exists(),
+        "tar entry escaped the output directory"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn shred_refuses_a_symlink_instead_of_destroying_its_target() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join("important.txt");
+    fs::write(&target, "do not destroy").unwrap();
+    let link = dir.path().join("link.txt");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    vaqum()
+        .args(["shred", link.to_str().unwrap(), "-y"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is a symlink"));
+    assert_eq!(fs::read_to_string(&target).unwrap(), "do not destroy");
+}
+
+#[cfg(unix)]
+#[test]
+fn compress_replaces_a_planted_symlink_instead_of_writing_through_it() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("in.txt");
+    write_sample_text(&input, 50);
+    let victim = dir.path().join("victim.txt");
+    fs::write(&victim, "keep me").unwrap();
+    // An attacker pre-plants the output path as a link to another file.
+    let out = dir.path().join("in.txt.vqm");
+    std::os::unix::fs::symlink(&victim, &out).unwrap();
+    vaqum()
+        .args(["compress", input.to_str().unwrap()])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&victim).unwrap(),
+        "keep me",
+        "write went through the symlink"
+    );
+    assert!(!fs::symlink_metadata(&out).unwrap().file_type().is_symlink());
+}
+
+#[test]
+fn compress_leaves_no_temp_files_behind() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("in.txt");
+    write_sample_text(&input, 50);
+    vaqum()
+        .args(["compress", input.to_str().unwrap()])
+        .assert()
+        .success();
+    let mut names: Vec<String> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["in.txt", "in.txt.vqm"]);
+}
+
+#[test]
+fn archives_encrypted_by_1_2_5_still_decrypt() {
+    let dir = TempDir::new().unwrap();
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    vaqum()
+        .args([
+            "decompress",
+            fixtures
+                .join("legacy-1.2.5-encrypted.vaqum")
+                .to_str()
+                .unwrap(),
+            "-o",
+            dir.path().to_str().unwrap(),
+            "--key-file",
+            fixtures.join("legacy.key").to_str().unwrap(),
+            "--verify",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(dir.path().join("legacy.txt")).unwrap(),
+        "legacy secret\n"
+    );
+}
+
+#[test]
+fn tampered_encrypted_archive_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    let key = dir.path().join("k");
+    fs::write(&key, "key").unwrap();
+    let input = dir.path().join("s.txt");
+    write_sample_text(&input, 200);
+    vaqum()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "--key-file",
+            key.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let archive = dir.path().join("s.txt.vqm");
+    let mut bytes = fs::read(&archive).unwrap();
+    let last = bytes.len() - 20;
+    bytes[last] ^= 0x01; // flip one bit in the encrypted payload
+    fs::write(&archive, bytes).unwrap();
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--key-file",
+            key.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(
+        !out.join("s.txt").exists(),
+        "tampered data must not be written out"
+    );
+}
+
+// ---------------------------------------------------------------------
+// --only wildcards
+// ---------------------------------------------------------------------
+
+/// Archive of a small tree with mixed file types, returning (archive, out dir).
+fn wildcard_archive(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let src = dir.join("proj");
+    fs::create_dir_all(src.join("src/nested")).unwrap();
+    fs::create_dir_all(src.join("docs/guide")).unwrap();
+    for (p, c) in [
+        ("src/main.rs", "fn main() {}"),
+        ("src/nested/util.rs", "pub fn u() {}"),
+        ("src/notes.txt", "notes"),
+        ("docs/intro.md", "# intro"),
+        ("docs/guide/setup.md", "# setup"),
+        ("docs/logo.png", "png"),
+        ("README.md", "# readme"),
+    ] {
+        fs::write(src.join(p), c).unwrap();
+    }
+    let archive = dir.join("proj.vqm");
+    vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    (archive, dir.join("out"))
+}
+
+fn extracted(out: &std::path::Path) -> Vec<String> {
+    let mut files = walk_relative(out);
+    files.sort();
+    files
+}
+
+#[test]
+fn only_wildcard_without_a_slash_matches_names_at_any_depth() {
+    let dir = TempDir::new().unwrap();
+    let (archive, out) = wildcard_archive(dir.path());
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "*.rs",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Extracted 2 files"));
+    assert_eq!(
+        extracted(&out),
+        ["proj/src/main.rs", "proj/src/nested/util.rs"]
+    );
+}
+
+#[test]
+fn only_wildcard_with_a_slash_matches_the_path_and_double_star_spans_folders() {
+    let dir = TempDir::new().unwrap();
+    let (archive, out) = wildcard_archive(dir.path());
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "docs/**/*.md",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        extracted(&out),
+        ["proj/docs/guide/setup.md", "proj/docs/intro.md"]
+    );
+
+    // A single `*` stays within one folder.
+    let out2 = dir.path().join("out2");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out2.to_str().unwrap(),
+            "--only",
+            "docs/*.md",
+        ])
+        .assert()
+        .success();
+    assert_eq!(extracted(&out2), ["proj/docs/intro.md"]);
+}
+
+#[test]
+fn only_wildcards_and_paths_combine_and_braces_work() {
+    let dir = TempDir::new().unwrap();
+    let (archive, out) = wildcard_archive(dir.path());
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "*.{png,txt}",
+            "--only",
+            "README.md",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        extracted(&out),
+        ["proj/README.md", "proj/docs/logo.png", "proj/src/notes.txt"]
+    );
+}
+
+#[test]
+fn only_wildcard_matching_a_folder_brings_its_contents() {
+    let dir = TempDir::new().unwrap();
+    let (archive, out) = wildcard_archive(dir.path());
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "gui*",
+        ])
+        .assert()
+        .success();
+    assert_eq!(extracted(&out), ["proj/docs/guide/setup.md"]);
+}
+
+#[test]
+fn only_wildcard_that_matches_nothing_fails_and_bad_patterns_are_reported() {
+    let dir = TempDir::new().unwrap();
+    let (archive, out) = wildcard_archive(dir.path());
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "*.zip",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "nothing in the archive matches: *.zip",
+        ));
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--only",
+            "[unclosed",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid --only pattern"));
+}
+
+// ---------------------------------------------------------------------
+// risky-content warnings
+// ---------------------------------------------------------------------
+
+/// A tree full of tricks, compressed; returns the archive.
+fn risky_archive(dir: &std::path::Path) -> std::path::PathBuf {
+    let src = dir.join("parcel");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("invoice.pdf"), b"MZ\x90\x00 fake windows program").unwrap();
+    fs::write(src.join("photo.jpg.exe"), b"not really").unwrap();
+    fs::write(src.join("report\u{202E}fdp.exe"), b"x").unwrap();
+    fs::write(src.join("readme.vbs"), b"x").unwrap();
+    fs::write(src.join("inner.dat"), b"PK\x03\x04 nested zip").unwrap();
+    fs::write(src.join("plain.txt"), b"perfectly normal").unwrap();
+    let archive = dir.join("parcel.vqm");
+    vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    archive
+}
+
+#[test]
+fn list_flags_disguised_and_risky_files() {
+    let dir = TempDir::new().unwrap();
+    let archive = risky_archive(dir.path());
+    let output = vaqum()
+        .args(["list", archive.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "parcel/invoice.pdf — is named like a .pdf but is actually a Windows program"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("photo.jpg.exe — looks like a .jpg but is really a .exe"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("invisible characters"), "{stderr}");
+    assert!(
+        stderr.contains("readme.vbs — runs code when opened (.vbs)"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("inner.dat — is another archive inside this one"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("plain.txt"),
+        "harmless files must not be flagged: {stderr}"
+    );
+
+    let listing = list_json(&archive, &[]);
+    let plain = listing["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == "parcel/plain.txt")
+        .unwrap();
+    assert!(plain.get("warnings").is_none());
+    let invoice = listing["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == "parcel/invoice.pdf")
+        .unwrap();
+    assert!(
+        invoice["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("Windows program")
+    );
+}
+
+#[test]
+fn decompress_shows_the_same_warnings_after_extracting() {
+    let dir = TempDir::new().unwrap();
+    let archive = risky_archive(dir.path());
+    let out = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("worth a closer look"))
+        .stderr(predicate::str::contains(
+            "invoice.pdf — is named like a .pdf but is actually a Windows program",
+        ));
+    // --only reports just what it extracted.
+    let out2 = dir.path().join("out2");
+    let output = vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out2.to_str().unwrap(),
+            "--only",
+            "plain.txt",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("closer look"));
+}
+
+#[test]
+fn clean_archives_produce_no_warnings() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let out = dir.path().join("out");
+    for args in [
+        vec!["list", archive.to_str().unwrap()],
+        vec![
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ],
+    ] {
+        let output = vaqum().args(&args).output().unwrap();
+        assert!(output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("closer look"));
+    }
+}
+
+#[test]
+fn tar_gz_link_pointing_outside_is_flagged() {
+    let dir = TempDir::new().unwrap();
+    let tgz = dir.path().join("links.tar.gz");
+    {
+        let enc = flate2::write::GzEncoder::new(
+            fs::File::create(&tgz).unwrap(),
+            flate2::Compression::default(),
+        );
+        let mut builder = tar::Builder::new(enc);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        builder
+            .append_link(&mut header, "keys", "/home/user/.ssh")
+            .unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+    }
+    vaqum()
+        .args(["list", tgz.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("keys -> /home/user/.ssh"))
+        .stderr(predicate::str::contains(
+            "keys — is a link pointing outside the archive (to /home/user/.ssh)",
+        ));
+}
+
+// ---------------------------------------------------------------------
+// download mark ("downloaded from the internet")
+// ---------------------------------------------------------------------
+
+#[cfg(target_os = "macos")]
+#[test]
+fn quarantine_mark_is_carried_to_extracted_files() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let mark = b"0083;6740a3c1;Safari;F0E1D2C3-0000-0000-0000-000000000000";
+    xattr::set(&archive, "com.apple.quarantine", mark).unwrap();
+    let out = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    for rel in ["src_tree/a.txt", "src_tree/nested/c.txt", "src_tree/nested"] {
+        assert_eq!(
+            xattr::get(out.join(rel), "com.apple.quarantine")
+                .unwrap()
+                .as_deref(),
+            Some(&mark[..]),
+            "{rel} lost the download mark"
+        );
+    }
+    // Single-file archives too.
+    let input = dir.path().join("one.txt");
+    fs::write(&input, "x").unwrap();
+    vaqum()
+        .args(["compress", input.to_str().unwrap()])
+        .assert()
+        .success();
+    let one = dir.path().join("one.txt.vqm");
+    xattr::set(&one, "com.apple.quarantine", mark).unwrap();
+    let out1 = dir.path().join("out1");
+    fs::create_dir_all(&out1).unwrap();
+    vaqum()
+        .args([
+            "decompress",
+            one.to_str().unwrap(),
+            "-o",
+            out1.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert!(
+        xattr::get(out1.join("one.txt"), "com.apple.quarantine")
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn archives_without_a_mark_extract_unmarked() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let out = dir.path().join("out");
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert!(
+        xattr::get(out.join("src_tree/a.txt"), "com.apple.quarantine")
+            .unwrap()
+            .is_none()
+    );
 }

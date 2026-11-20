@@ -11,12 +11,21 @@ const TEMPLATE: &str =
 
 /// A progress bar for `total` bytes of work, or a hidden no-op one when
 /// `quiet` is set or stderr isn't a terminal.
+const STREAM_TEMPLATE: &str = "{msg} {spinner} {bytes} {bytes_per_sec}";
+
 pub fn bar(total: u64, quiet: bool, message: &'static str) -> ProgressBar {
     if quiet || !io::stderr().is_terminal() {
         return ProgressBar::hidden();
     }
     let bar = ProgressBar::new(total);
-    if let Ok(style) = ProgressStyle::with_template(TEMPLATE) {
+    // Size unknown up front (e.g. reading from stdin): show bytes and speed
+    // without a percentage.
+    let template = if total == 0 {
+        STREAM_TEMPLATE
+    } else {
+        TEMPLATE
+    };
+    if let Ok(style) = ProgressStyle::with_template(template) {
         bar.set_style(style.progress_chars("=>-"));
     }
     bar.set_message(message);

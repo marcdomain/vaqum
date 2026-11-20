@@ -105,28 +105,56 @@ fn inspect_tar_gz(path: &Path) -> Result<(u64, u64)> {
     Ok((file_count, uncompressed_size))
 }
 
-pub fn extract(path: &Path, format: ForeignFormat, dest: &Path) -> Result<()> {
+pub fn extract(
+    path: &Path,
+    format: ForeignFormat,
+    dest: &Path,
+    ext: &mut crate::extract::Extracted,
+) -> Result<()> {
     fs::create_dir_all(dest).with_context(|| format!("failed to create {}", dest.display()))?;
     match format {
-        ForeignFormat::Zip => extract_zip(path, dest),
-        ForeignFormat::TarGz => extract_tar_gz(path, dest),
+        ForeignFormat::Zip => extract_zip(path, dest, ext),
+        ForeignFormat::TarGz => extract_tar_gz(path, dest, ext),
     }
 }
 
-fn extract_zip(path: &Path, dest: &Path) -> Result<()> {
+/// Uses the zip crate's own extractor (which refuses unsafe paths and
+/// links), then records and checks what it wrote.
+fn extract_zip(path: &Path, dest: &Path, ext: &mut crate::extract::Extracted) -> Result<()> {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut archive = zip::ZipArchive::new(file)
         .with_context(|| format!("failed to read zip archive {}", path.display()))?;
     archive
         .extract(dest)
         .with_context(|| format!("failed to extract zip archive into {}", dest.display()))?;
+    for i in 0..archive.len() {
+        let entry = archive.by_index_raw(i)?;
+        let Some(rel) = entry.enclosed_name() else {
+            continue;
+        };
+        let shown = crate::util::to_posix_path(&rel);
+        let written = dest.join(&rel);
+        if entry.is_dir() {
+            ext.add_dir(&written);
+        } else if entry.is_symlink() {
+            let target = fs::read_link(&written)
+                .map(|t| crate::util::to_posix_path(&t))
+                .unwrap_or_default();
+            crate::risk::push(
+                &mut ext.warnings,
+                &shown,
+                crate::risk::assess(&shown, crate::risk::Kind::Symlink(&target), None, &[]),
+            );
+            ext.written.push(written);
+        } else {
+            ext.add_file(&written, &shown, entry.unix_mode());
+        }
+    }
     Ok(())
 }
 
-fn extract_tar_gz(path: &Path, dest: &Path) -> Result<()> {
+fn extract_tar_gz(path: &Path, dest: &Path, ext: &mut crate::extract::Extracted) -> Result<()> {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    tar::Archive::new(GzDecoder::new(file))
-        .unpack(dest)
-        .with_context(|| format!("failed to extract tar.gz archive into {}", dest.display()))?;
-    Ok(())
+    crate::extract::unpack_tar(GzDecoder::new(file), dest, "", &mut |_| true, ext)
+        .with_context(|| format!("failed to extract tar.gz archive into {}", dest.display()))
 }

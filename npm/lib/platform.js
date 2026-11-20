@@ -26,12 +26,14 @@ const GITHUB_RELEASES = "https://github.com/marcdomain/vaqum/releases/download";
 const PLATFORMS = {
   "darwin-x64": { target: "x86_64-apple-darwin", os: "darwin", cpu: "x64" },
   "darwin-arm64": { target: "aarch64-apple-darwin", os: "darwin", cpu: "arm64" },
-  "linux-x64": { target: "x86_64-unknown-linux-gnu", os: "linux", cpu: "x64" },
-  // Statically linked musl build: runs on both glibc and musl distros.
+  // Linux builds are statically linked (musl): they run on both glibc and
+  // musl distros (e.g. Alpine).
+  "linux-x64": { target: "x86_64-unknown-linux-musl", os: "linux", cpu: "x64" },
   "linux-arm64": { target: "aarch64-unknown-linux-musl", os: "linux", cpu: "arm64" },
   // Node on Termux reports platform "android", not "linux".
   "android-arm64": { target: "aarch64-linux-android", os: "android", cpu: "arm64" },
   "win32-x64": { target: "x86_64-pc-windows-msvc", os: "win32", cpu: "x64" },
+  "win32-arm64": { target: "aarch64-pc-windows-msvc", os: "win32", cpu: "arm64" },
 };
 
 const PLATFORM_TARGETS = Object.fromEntries(Object.entries(PLATFORMS).map(([key, p]) => [key, p.target]));

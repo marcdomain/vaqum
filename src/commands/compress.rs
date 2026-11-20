@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -12,7 +12,7 @@ use crate::dedup;
 use crate::exclude::ExcludeSet;
 use crate::format::{Algorithm, CountingWriter, EntryType, HashingWriter, Header};
 use crate::progress::{self, ProgressWriter};
-use crate::util::human_bytes;
+use crate::util::{AtomicFile, Out, human_bytes, is_stdio};
 
 /// Result of streaming a source (file, directory, or multi-path bundle)
 /// through the compressor.
@@ -31,7 +31,17 @@ fn normalize_path(path: &Path) -> PathBuf {
 pub fn run(args: CompressArgs) -> Result<()> {
     let paths: Vec<PathBuf> = args.paths.iter().map(|p| normalize_path(p)).collect();
     let paths = &paths;
-    for path in paths {
+    let from_stdin = paths.iter().any(|p| is_stdio(p));
+    if from_stdin && paths.len() > 1 {
+        bail!("`-` (stdin) can't be combined with other inputs");
+    }
+    let to_stdout =
+        args.output.as_deref().is_some_and(is_stdio) || (from_stdin && args.output.is_none());
+    let out = Out::new(to_stdout);
+    if to_stdout && !args.dry_run && io::stdout().is_terminal() {
+        bail!("refusing to write a binary archive to the terminal; redirect it or pass -o <file>");
+    }
+    for path in paths.iter().filter(|p| !is_stdio(p)) {
         if !path.exists() {
             bail!("'{}' does not exist", path.display());
         }
@@ -87,15 +97,24 @@ pub fn run(args: CompressArgs) -> Result<()> {
             .map(|n| n.get())
             .unwrap_or(1)
     });
-    let name = describe_paths(paths);
+    let name = if from_stdin {
+        stdin_entry_name(args.output.as_deref())
+    } else {
+        describe_paths(paths)
+    };
 
-    let total_bytes = total_input_bytes(paths, &exclude_patterns)?;
+    // Unknown up front for stdin; the progress bar shows bytes/speed only.
+    let total_bytes = if from_stdin {
+        0
+    } else {
+        total_input_bytes(paths, &exclude_patterns)?
+    };
 
     if args.dry_run {
         if wants_encryption {
             bail!("--dry-run doesn't support -e/--key-file; it only estimates compression");
         }
-        let bar = progress::bar(total_bytes, args.quiet, "Compressing");
+        let bar = progress::bar(total_bytes, args.quiet || args.verbose, "Compressing");
         let stats = build_payload(
             paths,
             dedup_enabled,
@@ -107,10 +126,11 @@ pub fn run(args: CompressArgs) -> Result<()> {
             args.verbose,
             None,
             bar.clone(),
+            out,
         )?;
         bar.finish_and_clear();
-        println!("(dry run) would compress '{name}':");
-        print_summary(&stats, algorithm, dedup_enabled);
+        out.say(format!("(dry run) would compress '{name}':"));
+        print_summary(&stats, algorithm, dedup_enabled, out);
         return Ok(());
     }
 
@@ -122,28 +142,37 @@ pub fn run(args: CompressArgs) -> Result<()> {
         };
         let salt = crypto::random_salt();
         let nonce_prefix = crypto::random_nonce_prefix();
-        let key = crypto::derive_key(&key_material, &salt)?;
+        let key = crypto::derive_key(&key_material, &salt, true)?;
         Some((key, nonce_prefix, salt))
     } else {
         None
     };
 
     let output_path = match &args.output {
+        _ if to_stdout => PathBuf::from("-"),
         Some(path) => path.clone(),
         None if paths.len() == 1 => default_output_path(&paths[0]),
         None => {
             bail!("compressing multiple paths requires -o/--output to name the resulting archive")
         }
     };
-    let tmp_path = sibling_temp_path(&output_path);
+    let encrypt_key = encryption
+        .as_ref()
+        .map(|(key, nonce_prefix, _)| (key, nonce_prefix));
 
-    let bar = progress::bar(total_bytes, args.quiet, "Compressing");
+    // The header (which holds the payload's size and checksum) comes first
+    // in the file, so the payload is staged in an anonymous temp file (it
+    // has no name, so nothing else can open or replace it, and the OS
+    // deletes it when vaqum exits) and copied in behind the header once
+    // that's known. It's staged next to the output to stay on the same disk.
+    let bar = progress::bar(total_bytes, args.quiet || args.verbose, "Compressing");
+    let mut staging = if to_stdout {
+        tempfile::tempfile()
+    } else {
+        tempfile::tempfile_in(output_dir(&output_path))
+    }
+    .context("failed to create a temporary file")?;
     let stats = {
-        let tmp_file = File::create(&tmp_path)
-            .with_context(|| format!("failed to create temporary file {}", tmp_path.display()))?;
-        let encrypt_key = encryption
-            .as_ref()
-            .map(|(key, nonce_prefix, _)| (key, nonce_prefix));
         let result = build_payload(
             paths,
             dedup_enabled,
@@ -151,14 +180,12 @@ pub fn run(args: CompressArgs) -> Result<()> {
             algorithm,
             level,
             threads,
-            tmp_file,
+            &staging,
             args.verbose,
             encrypt_key,
             bar.clone(),
+            out,
         );
-        if result.is_err() {
-            let _ = fs::remove_file(&tmp_path);
-        }
         result?
     };
     bar.finish_and_clear();
@@ -172,6 +199,7 @@ pub fn run(args: CompressArgs) -> Result<()> {
         algorithm,
         dedup: dedup_enabled,
         encrypted: wants_encryption,
+        strong_kdf: wants_encryption,
         original_size: stats.original_size,
         checksum: stats.checksum,
         salt,
@@ -179,9 +207,21 @@ pub fn run(args: CompressArgs) -> Result<()> {
         name,
     };
 
-    let write_result = write_final_output(&output_path, &tmp_path, &header);
-    let _ = fs::remove_file(&tmp_path);
-    write_result?;
+    staging.seek(SeekFrom::Start(0))?;
+    if to_stdout {
+        let mut stdout = io::stdout().lock();
+        header.write(&mut stdout)?;
+        io::copy(&mut staging, &mut stdout).context("failed to write archive to stdout")?;
+        stdout
+            .flush()
+            .context("failed to write archive to stdout")?;
+    } else {
+        let mut out_file = AtomicFile::create(&output_path)?;
+        header.write(out_file.file())?;
+        io::copy(&mut staging, out_file.file())
+            .with_context(|| format!("failed to write {}", output_path.display()))?;
+        out_file.commit()?;
+    }
 
     let total_out = header.on_disk_len() + stats.compressed_size;
     let verb = if wants_encryption {
@@ -189,29 +229,27 @@ pub fn run(args: CompressArgs) -> Result<()> {
     } else {
         "Compressed"
     };
-    println!("✔ {verb} '{}' -> '{}'", header.name, output_path.display());
+    let dest = if to_stdout {
+        "stdout".to_string()
+    } else {
+        output_path.display().to_string()
+    };
+    out.say(format!("✔ {verb} '{}' -> '{dest}'", header.name));
     if wants_encryption {
-        println!("  encryption:   ChaCha20-Poly1305, Argon2id KDF");
+        out.say("  encryption:   ChaCha20-Poly1305, Argon2id KDF");
     }
-    print_summary(&stats, algorithm, dedup_enabled);
+    print_summary(&stats, algorithm, dedup_enabled, out);
     let ratio = if stats.original_size > 0 {
         stats.original_size as f64 / total_out.max(1) as f64
     } else {
         1.0
     };
-    println!("  output size:  {} ({:.2}x)", human_bytes(total_out), ratio);
+    out.say(format!(
+        "  output size:  {} ({:.2}x)",
+        human_bytes(total_out),
+        ratio
+    ));
 
-    Ok(())
-}
-
-fn write_final_output(output_path: &Path, tmp_path: &Path, header: &Header) -> Result<()> {
-    let mut out = File::create(output_path)
-        .with_context(|| format!("failed to create {}", output_path.display()))?;
-    header.write(&mut out)?;
-    let mut tmp_in =
-        File::open(tmp_path).with_context(|| format!("failed to reopen {}", tmp_path.display()))?;
-    io::copy(&mut tmp_in, &mut out)
-        .with_context(|| format!("failed to write {}", output_path.display()))?;
     Ok(())
 }
 
@@ -227,6 +265,7 @@ fn build_payload<W: Write>(
     verbose: bool,
     encrypt_key: Option<(&crypto::Key, &crypto::NoncePrefix)>,
     bar: indicatif::ProgressBar,
+    out: Out,
 ) -> Result<PayloadStats> {
     let counting = CountingWriter::new(dest);
     let encrypt_writer = crypto::EncryptWriter::new(counting, encrypt_key);
@@ -236,6 +275,11 @@ fn build_payload<W: Write>(
     let hashing = HashingWriter::new(progress_writer);
 
     let hashing = match paths {
+        [single] if is_stdio(single) => {
+            let mut hashing = hashing;
+            io::copy(&mut io::stdin().lock(), &mut hashing).context("failed to read stdin")?;
+            hashing
+        }
         [single] if !single.is_dir() => {
             let mut hashing = hashing;
             let mut src = File::open(single)
@@ -256,12 +300,12 @@ fn build_payload<W: Write>(
                     |path, size, is_dup| {
                         if verbose {
                             let tag = if is_dup { "dup " } else { "new " };
-                            println!("  {tag}{path}  ({})", human_bytes(size));
+                            out.say(format!("  {tag}{path}  ({})", human_bytes(size)));
                         }
                     },
                 )?;
             } else {
-                append_directory_tar(&mut builder, single, "", Some(&exclude), verbose)?;
+                append_directory_tar(&mut builder, single, "", Some(&exclude), verbose, out)?;
             }
             builder
                 .into_inner()
@@ -270,7 +314,7 @@ fn build_payload<W: Write>(
         multiple => {
             let mut builder = tar::Builder::new(hashing);
             for path in multiple {
-                append_bundle_entry(&mut builder, path, exclude_patterns, verbose)?;
+                append_bundle_entry(&mut builder, path, exclude_patterns, verbose, out)?;
             }
             builder
                 .into_inner()
@@ -302,6 +346,7 @@ fn append_bundle_entry<W: Write>(
     path: &Path,
     exclude_patterns: &[String],
     verbose: bool,
+    out: Out,
 ) -> Result<()> {
     let basename = basename_of(path);
 
@@ -310,14 +355,14 @@ fn append_bundle_entry<W: Write>(
             .append_dir(&basename, path)
             .with_context(|| format!("failed to archive directory {basename}"))?;
         let exclude = ExcludeSet::build(path, exclude_patterns)?;
-        append_directory_tar(builder, path, &basename, Some(&exclude), verbose)
+        append_directory_tar(builder, path, &basename, Some(&exclude), verbose, out)
     } else {
         let size = path.metadata().map(|m| m.len()).unwrap_or(0);
         builder
             .append_path_with_name(path, &basename)
             .with_context(|| format!("failed to archive {basename}"))?;
         if verbose {
-            println!("  {basename}  ({})", human_bytes(size));
+            out.say(format!("  {basename}  ({})", human_bytes(size)));
         }
         Ok(())
     }
@@ -332,6 +377,7 @@ fn append_directory_tar<W: Write>(
     prefix: &str,
     exclude: Option<&ExcludeSet>,
     verbose: bool,
+    out: Out,
 ) -> Result<()> {
     let walker = walkdir::WalkDir::new(root)
         .min_depth(1)
@@ -365,7 +411,7 @@ fn append_directory_tar<W: Write>(
                 .append_path_with_name(entry.path(), &rel_str)
                 .with_context(|| format!("failed to archive {rel_str}"))?;
             if verbose {
-                println!("  {rel_str}  ({})", human_bytes(size));
+                out.say(format!("  {rel_str}  ({})", human_bytes(size)));
             }
         }
         // Symlinks and other special files are skipped; tar can represent
@@ -425,33 +471,55 @@ fn describe_paths(paths: &[PathBuf]) -> String {
         .join(", ")
 }
 
-fn print_summary(stats: &PayloadStats, algorithm: Algorithm, dedup: bool) {
+fn print_summary(stats: &PayloadStats, algorithm: Algorithm, dedup: bool, out: Out) {
     let ratio = if stats.compressed_size > 0 {
         stats.original_size as f64 / stats.compressed_size as f64
     } else {
         1.0
     };
-    println!(
+    out.say(format!(
         "  algorithm:    {}{}",
         algorithm.label(),
         if dedup { " + dedup" } else { "" }
-    );
-    println!("  original:     {}", human_bytes(stats.original_size));
-    println!(
+    ));
+    out.say(format!(
+        "  original:     {}",
+        human_bytes(stats.original_size)
+    ));
+    out.say(format!(
         "  compressed:   {} ({:.2}x)",
         human_bytes(stats.compressed_size),
         ratio
-    );
+    ));
 }
 
 fn default_output_path(input: &Path) -> PathBuf {
     let mut s = input.as_os_str().to_os_string();
-    s.push(".vaqum");
+    s.push(".vqm");
     PathBuf::from(s)
 }
 
-fn sibling_temp_path(output_path: &Path) -> PathBuf {
-    let mut s = output_path.as_os_str().to_os_string();
-    s.push(".tmp");
-    PathBuf::from(s)
+fn output_dir(output_path: &Path) -> PathBuf {
+    match output_path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
+/// Name stored in the header for stdin input (used when the archive is
+/// later decompressed to a file): the output's name minus `.vqm` (or the
+/// older `.vaqum`), or "stdin".
+fn stdin_entry_name(output: Option<&Path>) -> String {
+    output
+        .filter(|p| !is_stdio(p))
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .map(|n| {
+            n.strip_suffix(".vqm")
+                .or_else(|| n.strip_suffix(".vaqum"))
+                .map(str::to_string)
+                .unwrap_or(n)
+        })
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "stdin".to_string())
 }

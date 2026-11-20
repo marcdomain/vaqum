@@ -1,11 +1,11 @@
 {
   "name": "@marcdomain/vaqum",
-  "version": "1.2.5",
+  "version": "1.3.0",
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
-  "description": "Losslessly compress, decompress, and securely shred files — thin wrapper around the native vaqum binary.",
+  "description": "Losslessly compress, decompress, and securely shred files \u2014 thin wrapper around the native vaqum binary.",
   "main": "bin/vaqum.js",
   "bin": {
     "vaqum": "bin/vaqum.js"
@@ -44,12 +44,13 @@
     "node": ">=16"
   },
   "optionalDependencies": {
-    "@marcdomain/vaqum-darwin-x64": "1.2.5",
-    "@marcdomain/vaqum-darwin-arm64": "1.2.5",
-    "@marcdomain/vaqum-linux-x64": "1.2.5",
-    "@marcdomain/vaqum-linux-arm64": "1.2.5",
-    "@marcdomain/vaqum-android-arm64": "1.2.5",
-    "@marcdomain/vaqum-win32-x64": "1.2.5"
+    "@marcdomain/vaqum-darwin-x64": "1.3.0",
+    "@marcdomain/vaqum-darwin-arm64": "1.3.0",
+    "@marcdomain/vaqum-linux-x64": "1.3.0",
+    "@marcdomain/vaqum-linux-arm64": "1.3.0",
+    "@marcdomain/vaqum-android-arm64": "1.3.0",
+    "@marcdomain/vaqum-win32-x64": "1.3.0",
+    "@marcdomain/vaqum-win32-arm64": "1.3.0"
   },
   "files": [
     "bin/vaqum.js",

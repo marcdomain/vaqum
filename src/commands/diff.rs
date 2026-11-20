@@ -117,7 +117,7 @@ fn open_in_editor(
             let (path_b, from_archive_b) = materialize_for_editor(&args.b, b)?;
             if from_archive_a || from_archive_b {
                 println!(
-                    "\nnote: side(s) decompressed from a .vaqum archive are scratch copies — edits there won't be saved back into the archive."
+                    "\nnote: side(s) decompressed from a .vqm archive are scratch copies — edits there won't be saved back into the archive."
                 );
             }
             println!("\nopening '{na}' vs '{nb}' in `{editor} --diff` ...");
@@ -262,7 +262,10 @@ fn resolve_vaqum(path: &Path) -> Result<Resolved> {
             path.display()
         );
     }
-    let decoder = codec::Decoder::new(in_file, header.algorithm)?;
+    let decoder = crate::format::SizeLimitReader::new(
+        codec::Decoder::new(in_file, header.algorithm)?,
+        header.original_size,
+    );
 
     match header.entry_type {
         EntryType::File => {
@@ -280,7 +283,14 @@ fn resolve_vaqum(path: &Path) -> Result<Resolved> {
             let temp = TempDir::new().context("failed to create a temp directory")?;
             let staging_dir = temp.path().join(".vaqum-diff-staging");
             let target_dir = temp.path().join(&header.name);
-            dedup::unpack_tar(decoder, header.dedup, &staging_dir, &target_dir)?;
+            dedup::unpack_tar(
+                decoder,
+                header.dedup,
+                &staging_dir,
+                &target_dir,
+                "",
+                &mut crate::extract::Extracted::default(),
+            )?;
             Ok(Resolved::Dir {
                 name: header.name,
                 root: target_dir,
@@ -291,7 +301,14 @@ fn resolve_vaqum(path: &Path) -> Result<Resolved> {
             let temp = TempDir::new().context("failed to create a temp directory")?;
             let staging_dir = temp.path().join(".vaqum-diff-staging");
             let target_dir = temp.path().join("bundle");
-            dedup::unpack_tar(decoder, header.dedup, &staging_dir, &target_dir)?;
+            dedup::unpack_tar(
+                decoder,
+                header.dedup,
+                &staging_dir,
+                &target_dir,
+                "",
+                &mut crate::extract::Extracted::default(),
+            )?;
             Ok(Resolved::Dir {
                 name: header.name,
                 root: target_dir,

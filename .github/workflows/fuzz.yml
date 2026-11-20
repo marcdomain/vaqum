@@ -1,0 +1,50 @@
+name: Fuzz
+
+# Throws millions of malformed archives at vaqum's readers each week. A
+# crash or an extraction outside the output folder fails the run and
+# uploads the input that caused it. Run locally with
+#   cd fuzz && cargo +nightly fuzz run <archive|tar_extract|names>
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Seconds per target'
+        default: '600'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [archive, tar_extract, names]
+    defaults:
+      run:
+        working-directory: fuzz
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.2
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          SECONDS_PER_TARGET: ${{ inputs.seconds || '600' }}
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          cp seeds/${{ matrix.target }}/* corpus/${{ matrix.target }}/
+          cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+            -max_total_time="$SECONDS_PER_TARGET" -rss_limit_mb=2048
+      - name: Upload crashing input
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/

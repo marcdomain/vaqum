@@ -1,4 +1,3 @@
-#[cfg(unix)]
 use std::fs;
 use std::fs::File;
 use std::io::{self, Read};
@@ -209,10 +208,44 @@ pub fn hex_encode(bytes: &[u8]) -> String {
 /// Render a path's components joined with `/`, regardless of platform, so
 /// archive entries stay portable between Windows and Unix.
 pub fn to_posix_path(path: &Path) -> String {
-    path.components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut out = String::new();
+    for c in path.components() {
+        if let std::path::Component::RootDir = c {
+            out.push('/');
+            continue;
+        }
+        if !out.is_empty() && !out.ends_with('/') {
+            out.push('/');
+        }
+        out.push_str(&c.as_os_str().to_string_lossy());
+    }
+    out
+}
+
+/// `-` as a path means stdin (for an input) or stdout (for an output).
+pub fn is_stdio(path: &Path) -> bool {
+    path.as_os_str() == "-"
+}
+
+/// Status messages normally go to stdout, but when stdout is carrying the
+/// archive/file data itself they must go to stderr instead.
+#[derive(Clone, Copy)]
+pub struct Out {
+    to_stderr: bool,
+}
+
+impl Out {
+    pub fn new(to_stderr: bool) -> Self {
+        Self { to_stderr }
+    }
+
+    pub fn say(&self, msg: impl std::fmt::Display) {
+        if self.to_stderr {
+            eprintln!("{msg}");
+        } else {
+            println!("{msg}");
+        }
+    }
 }
 
 /// Read a single line of interactive confirmation input from stdin.
@@ -223,4 +256,83 @@ pub fn prompt_line(prompt: &str) -> Result<String> {
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     Ok(input.trim().to_string())
+}
+
+/// Writes a file safely: data goes to a new, randomly named temp file next
+/// to `dest` (created exclusively, so a pre-planted file or symlink can't
+/// hijack it), which is renamed over `dest` only on [`AtomicFile::commit`].
+/// If anything fails first, the temp file is removed and `dest` is left
+/// untouched, so a failed run never leaves a half-written output.
+pub struct AtomicFile {
+    tmp: PathBuf,
+    dest: PathBuf,
+    file: Option<File>,
+}
+
+impl AtomicFile {
+    pub fn create(dest: &Path) -> Result<Self> {
+        let dir = match dest.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
+        let base = dest
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "vaqum".to_string());
+        for _ in 0..16 {
+            let mut suffix = [0u8; 6];
+            rand::Rng::fill_bytes(&mut rand::rng(), &mut suffix);
+            let tmp = dir.join(format!(".{base}.{}.tmp", hex_encode(&suffix)));
+            match fs::OpenOptions::new()
+                .write(true)
+                .read(true)
+                .create_new(true)
+                .open(&tmp)
+            {
+                Ok(file) => {
+                    return Ok(Self {
+                        tmp,
+                        dest: dest.to_path_buf(),
+                        file: Some(file),
+                    });
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!("failed to create a temporary file in {}", dir.display())
+                    });
+                }
+            }
+        }
+        anyhow::bail!(
+            "could not create a unique temporary file in {}",
+            dir.display()
+        )
+    }
+
+    pub fn file(&mut self) -> &mut File {
+        self.file.as_mut().expect("file is open until commit")
+    }
+
+    /// Moves the finished file into place.
+    pub fn commit(mut self) -> Result<()> {
+        if let Some(file) = self.file.take() {
+            use std::io::Write;
+            let mut file = file;
+            file.flush()?;
+        }
+        fs::rename(&self.tmp, &self.dest)
+            .with_context(|| format!("failed to write {}", self.dest.display()))?;
+        self.tmp = PathBuf::new();
+        Ok(())
+    }
+}
+
+impl Drop for AtomicFile {
+    fn drop(&mut self) {
+        self.file.take();
+        if !self.tmp.as_os_str().is_empty() {
+            let _ = fs::remove_file(&self.tmp);
+        }
+    }
 }

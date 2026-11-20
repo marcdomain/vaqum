@@ -17,16 +17,19 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Compress one or more files/directories into a .vaqum archive
+    /// Compress one or more files/directories into a .vqm archive
     Compress(CompressArgs),
-    /// Decompress a .vaqum archive
+    /// Decompress a .vqm archive (older .vaqum files work too)
     Decompress(DecompressArgs),
+    /// List the files inside an archive without extracting it
+    #[command(visible_alias = "ls")]
+    List(ListArgs),
     /// Securely overwrite and delete a file or directory
     Shred(ShredArgs),
-    /// Show stats about a .vaqum archive (without fully decompressing it),
+    /// Show stats about a .vqm archive (without fully decompressing it),
     /// or about a plain file or directory
     Info(InfoArgs),
-    /// Compare two files, directories, or .vaqum archives (any mix)
+    /// Compare two files, directories, or .vqm archives (any mix)
     Diff(DiffArgs),
     /// Find and report duplicate files in a directory tree
     Dedupe(DedupeArgs),
@@ -70,12 +73,14 @@ pub struct CompletionsArgs {
 
 #[derive(Parser)]
 pub struct CompressArgs {
-    /// File(s) and/or directory(-ies) to compress into one archive
+    /// File(s) and/or directory(-ies) to compress into one archive. Use
+    /// `-` to read a single file's contents from stdin
     #[arg(required = true, num_args = 1..)]
     pub paths: Vec<PathBuf>,
 
-    /// Output path (default: <input>.vaqum; required when compressing
-    /// more than one path)
+    /// Output path (default: <input>.vqm; required when compressing
+    /// more than one path). Use `-` to write the archive to stdout (the
+    /// default when the input is `-`)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
@@ -136,12 +141,21 @@ pub struct CompressArgs {
 
 #[derive(Parser)]
 pub struct DecompressArgs {
-    /// .vaqum file to decompress
+    /// .vqm archive to decompress (`-` reads it from stdin)
     pub path: PathBuf,
 
-    /// Output location (default: current dir)
+    /// Output location (default: current dir). Use `-` to write to stdout:
+    /// a single-file archive's contents, or a directory archive's raw tar
+    /// stream (e.g. `vaqum decompress a.vqm -o - | tar x`)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+
+    /// Extract only matching paths (repeatable). A directory extracts
+    /// everything inside it. Wildcards work like .gitignore: `*.rs` matches
+    /// at any depth, `docs/**/*.md` matches the path. Paths are as
+    /// `vaqum list` shows them
+    #[arg(long = "only", value_name = "PATH")]
+    pub only: Vec<String>,
 
     /// Show extra output (e.g. the decompressed size)
     #[arg(short, long)]
@@ -172,9 +186,10 @@ pub struct DecompressArgs {
 
 #[derive(Parser)]
 #[command(
-    after_help = "Note: multi-pass overwrite is best-effort, not forensic-grade. On SSDs, \
-wear-leveling and TRIM mean the drive can retain copies of data at physical \
-locations the overwrite never touches."
+    after_help = "Note: multi-pass overwrite is best-effort, not forensic-grade. SSDs \
+(wear-leveling, TRIM) and copy-on-write filesystems (APFS, btrfs, ZFS) can keep \
+copies of the data in places the overwrite never touches, as can backups and \
+snapshots. Full-disk encryption is the reliable protection."
 )]
 pub struct ShredArgs {
     /// File or directory to shred
@@ -203,8 +218,27 @@ pub struct ShredArgs {
 }
 
 #[derive(Parser)]
+pub struct ListArgs {
+    /// .vqm, zip, or tar.gz archive to list (`-` reads a .vqm from stdin)
+    pub path: PathBuf,
+
+    /// Decrypt using this file's bytes as the key material, instead of a
+    /// password prompt
+    #[arg(long)]
+    pub key_file: Option<PathBuf>,
+
+    /// Print the listing as JSON
+    #[arg(long)]
+    pub json: bool,
+
+    /// Suppress the progress bar
+    #[arg(short, long)]
+    pub quiet: bool,
+}
+
+#[derive(Parser)]
 pub struct InfoArgs {
-    /// .vaqum archive, plain file, or directory to inspect
+    /// .vqm archive, plain file, or directory to inspect
     pub path: PathBuf,
 }
 
@@ -215,10 +249,10 @@ found, 2 = trouble (e.g. one side doesn't exist, or a file is being compared \
 against a directory)."
 )]
 pub struct DiffArgs {
-    /// First file, directory, or .vaqum archive
+    /// First file, directory, or .vqm archive
     pub a: PathBuf,
 
-    /// Second file, directory, or .vaqum archive
+    /// Second file, directory, or .vqm archive
     pub b: PathBuf,
 
     /// Show full unified diffs for every changed file, not just a summary
@@ -240,7 +274,7 @@ pub struct DiffArgs {
     /// default (VS Code); override with $VAQUM_DIFF_EDITOR for another
     /// editor that supports the same `<editor> --diff <a> <b>` convention.
     /// For a plain file vs. a plain file this opens the real files
-    /// directly, so edits save normally; a .vaqum side is decompressed to
+    /// directly, so edits save normally; a .vqm side is decompressed to
     /// a scratch copy first (noted on screen) since there's nothing on
     /// disk to edit. For directories, opens one diff tab per modified
     /// text file (capped, to avoid flooding the editor).
