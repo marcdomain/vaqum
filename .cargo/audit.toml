@@ -1,0 +1,9 @@
+# Settings for `cargo audit` (run in CI by .github/workflows/ci.yml).
+[advisories]
+ignore = [
+  # chrono is unmaintained. It's only pulled in by zxcvbn (the password
+  # strength check) when building for WebAssembly, which vaqum never does:
+  # `cargo tree -i chrono --target <each release target>` is empty. Not a
+  # vulnerability; any new advisory against chrono still fails the audit.
+  "RUSTSEC-2026-0543",
+]
