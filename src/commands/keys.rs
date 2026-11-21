@@ -22,7 +22,8 @@ pub fn keygen(args: KeygenArgs) -> Result<()> {
     } else {
         println!("Choose a passphrase to protect your key (it's never stored anywhere):");
         Some(crate::crypto::prompt_new_passphrase(
-            "creating a protected key",
+            "protecting the new key needs a passphrase",
+            "pass --no-passphrase for an unprotected key (e.g. for CI)",
         )?)
     };
     let identity = Identity::generate()?;
@@ -75,7 +76,10 @@ pub fn passphrase(args: PassphraseArgs) -> Result<()> {
         println!("  The key is now unprotected on disk: keep the file secret.");
         return Ok(());
     }
-    let new = crate::crypto::prompt_new_passphrase("setting a passphrase")?;
+    let new = crate::crypto::prompt_new_passphrase(
+        "setting a passphrase needs you to type it",
+        "run `vaqum passphrase` in a terminal",
+    )?;
     identity.rewrite(&path, Some(&new))?;
     println!(
         "✔ {} the passphrase on {}",

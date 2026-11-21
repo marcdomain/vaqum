@@ -279,18 +279,21 @@ impl<R: Read> Read for DecryptReader<R> {
 /// tasks there's no terminal, and on Windows a console prompt would wait
 /// forever. A terminal on stdin or stderr counts (so piping data in still
 /// prompts interactively).
-fn ensure_interactive(what: &str) -> Result<()> {
+/// `problem` says what needs typing; `hint` is the unattended alternative
+/// that fits that command.
+fn ensure_interactive(problem: &str, hint: &str) -> Result<()> {
     use std::io::IsTerminal;
     if !io::stdin().is_terminal() && !io::stderr().is_terminal() {
-        bail!(
-            "{what} needs a password, but there's no terminal to type it in; pass --key-file <file> instead"
-        );
+        bail!("{problem}, but there's no terminal to type it in; {hint}");
     }
     Ok(())
 }
 
 pub fn prompt_new_password() -> Result<String> {
-    ensure_interactive("encrypting")?;
+    ensure_interactive(
+        "encrypting needs a password",
+        "pass --key-file <file> instead",
+    )?;
     let password =
         rpassword::prompt_password("Enter password: ").context("failed to read password")?;
     let confirm =
@@ -303,14 +306,14 @@ pub fn prompt_new_password() -> Result<String> {
 }
 
 /// Asks for an existing secret with a custom prompt (e.g. a key passphrase).
-pub fn prompt_secret(prompt: &str, needed_for: &str) -> Result<String> {
-    ensure_interactive(needed_for)?;
+pub fn prompt_secret(prompt: &str, problem: &str, hint: &str) -> Result<String> {
+    ensure_interactive(problem, hint)?;
     rpassword::prompt_password(prompt).context("failed to read passphrase")
 }
 
 /// Asks for a new passphrase twice, warning if it looks weak.
-pub fn prompt_new_passphrase(needed_for: &str) -> Result<String> {
-    ensure_interactive(needed_for)?;
+pub fn prompt_new_passphrase(problem: &str, hint: &str) -> Result<String> {
+    ensure_interactive(problem, hint)?;
     let passphrase =
         rpassword::prompt_password("New passphrase: ").context("failed to read passphrase")?;
     if passphrase.is_empty() {
@@ -326,7 +329,10 @@ pub fn prompt_new_passphrase(needed_for: &str) -> Result<String> {
 }
 
 pub fn prompt_existing_password() -> Result<String> {
-    ensure_interactive("this archive is encrypted and")?;
+    ensure_interactive(
+        "this archive is encrypted and needs a password",
+        "pass --key-file <file> instead",
+    )?;
     rpassword::prompt_password("Enter password: ").context("failed to read password")
 }
 

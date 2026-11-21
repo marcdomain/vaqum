@@ -265,7 +265,8 @@ impl Identity {
             Ok(p) if !p.is_empty() => p,
             _ => crate::crypto::prompt_secret(
                 "Your key's passphrase: ",
-                "your key is protected and",
+                "your key is protected by a passphrase",
+                "set VAQUM_IDENTITY_PASSPHRASE, or use a key made with --no-passphrase",
             )?,
         };
         let key = crate::crypto::derive_key(passphrase.as_bytes(), &salt, true)?;

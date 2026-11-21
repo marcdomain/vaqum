@@ -4543,7 +4543,9 @@ fn protected_identity_keeps_secrets_sealed_and_needs_the_passphrase() {
         .stderr(predicate::str::contains("wrong passphrase"));
     open(None)
         .failure()
-        .stderr(predicate::str::contains("no terminal"));
+        .stderr(predicate::str::contains("no terminal"))
+        .stderr(predicate::str::contains("VAQUM_IDENTITY_PASSPHRASE"))
+        .stderr(predicate::str::contains("--key-file").not());
     open(Some(pass)).success();
     assert_eq!(
         fs::read(&input).unwrap(),
@@ -4559,7 +4561,9 @@ fn keygen_without_a_terminal_requires_an_explicit_choice() {
         .timeout(std::time::Duration::from_secs(20))
         .assert()
         .failure()
-        .stderr(predicate::str::contains("no terminal"));
+        .stderr(predicate::str::contains("no terminal"))
+        .stderr(predicate::str::contains("--no-passphrase"))
+        .stderr(predicate::str::contains("--key-file").not());
     assert!(!dir.path().join("k").exists());
 }
 
@@ -4992,4 +4996,28 @@ fn leak_check_does_not_flag_an_encrypted_secrets_file() {
         .output()
         .unwrap();
     assert!(!String::from_utf8_lossy(&out.stderr).contains("Possible secrets"));
+}
+
+#[test]
+fn secrets_set_refuses_an_empty_piped_value() {
+    let v = vault();
+    vaqum()
+        .args([
+            "secrets",
+            "set",
+            "EMPTY",
+            "-f",
+            v.file.to_str().unwrap(),
+            "-i",
+            v.alice.identity.to_str().unwrap(),
+        ])
+        .write_stdin("")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no value received for EMPTY"));
+    vaqum()
+        .args(["secrets", "list", "-f", v.file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("EMPTY").not());
 }

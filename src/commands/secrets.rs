@@ -33,14 +33,24 @@ fn own_public_key(identity: Option<&Path>) -> Result<PublicKey> {
 /// piped (`echo "$TOKEN" | vaqum secrets set TOKEN`).
 fn read_value(name: &str) -> Result<String> {
     if std::io::stdin().is_terminal() {
-        return crate::crypto::prompt_secret(&format!("Value for {name}: "), "setting a secret");
+        return crate::crypto::prompt_secret(
+            &format!("Value for {name}: "),
+            "setting a secret needs its value",
+            &format!("pipe it in: printf '%s' \"$VALUE\" | vaqum secrets set {name}"),
+        );
     }
     let mut value = String::new();
     std::io::stdin()
         .read_to_string(&mut value)
         .context("failed to read the value from stdin")?;
     let value = value.strip_suffix('\n').unwrap_or(&value);
-    Ok(value.strip_suffix('\r').unwrap_or(value).to_string())
+    let value = value.strip_suffix('\r').unwrap_or(value);
+    if value.is_empty() {
+        bail!(
+            "no value received for {name}; pipe it in (printf '%s' \"$VALUE\" | vaqum secrets set {name}) or run it in a terminal"
+        );
+    }
+    Ok(value.to_string())
 }
 
 pub fn run(args: SecretsArgs) -> Result<()> {
