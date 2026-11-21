@@ -70,9 +70,9 @@ test ! -e escaped
 
 step "personal keys: encrypt for a recipient, sign, verify"
 export XDG_CONFIG_HOME="$work/cfg"
-"$V" keygen >/dev/null
+"$V" keygen --no-passphrase >/dev/null
 me="$("$V" pubkey)"
-"$V" keygen -o other.key >/dev/null
+"$V" keygen --no-passphrase -o other.key >/dev/null
 "$V" compress proj/big.txt --to "$me" --sign -o to.vqm >/dev/null
 "$V" verify to.vqm --from "$me" >/dev/null
 mkdir to-out
@@ -80,6 +80,16 @@ mkdir to-out
 same to-out/big.txt proj/big.txt
 if "$V" list to.vqm -i other.key >/dev/null 2>&1; then
   echo "a non-recipient opened the archive"; exit 1
+fi
+
+step "secrets file and vaqum run"
+printf 'API_TOKEN=tok_smoke\nDB_URL=postgres://u:p@h/db\n' > app.env
+"$V" secrets init -f app.vqm >/dev/null
+"$V" secrets import app.env -f app.vqm >/dev/null
+rm app.env
+"$V" run -f app.vqm -- sh -c 'test "$API_TOKEN" = tok_smoke && test "$DB_URL" = postgres://u:p@h/db'
+if "$V" secrets get API_TOKEN -f app.vqm -i other.key >/dev/null 2>&1; then
+  echo "a non-member read a secret"; exit 1
 fi
 
 step "leak check"

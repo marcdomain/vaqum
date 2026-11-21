@@ -28,8 +28,11 @@ fn main() {
         Command::Search(args) => exit_on_match_result(commands::search::run(args)),
         Command::Keygen(args) => exit_on_result(commands::keys::keygen(args)),
         Command::Pubkey(args) => exit_on_result(commands::keys::pubkey(args)),
+        Command::Passphrase(args) => exit_on_result(commands::keys::passphrase(args)),
         Command::Sign(args) => exit_on_result(commands::keys::sign(args)),
         Command::Verify(args) => exit_on_result(commands::keys::verify(args)),
+        Command::Secrets(args) => exit_on_result(commands::secrets::run(args)),
+        Command::Run(args) => exit_on_result(commands::secrets::run_command(args)),
         Command::Completions(args) => exit_on_result(commands::completions::run(args)),
         Command::Config(args) => exit_on_result(commands::config::run(args.action)),
     }

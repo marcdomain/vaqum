@@ -40,10 +40,17 @@ pub enum Command {
     Keygen(KeygenArgs),
     /// Print your public key, to share with people who send you archives
     Pubkey(PubkeyArgs),
+    /// Add, change or remove the passphrase protecting your key
+    Passphrase(PassphraseArgs),
     /// Sign an archive, so recipients can check who made it
     Sign(SignArgs),
     /// Check an archive's signature against the sender's public key
     Verify(VerifyArgs),
+    /// Keep app secrets (.env values) encrypted, safe to commit to git
+    Secrets(SecretsArgs),
+    /// Run a command with the secrets from a secrets file as environment
+    /// variables (never written to disk in plain text)
+    Run(RunArgs),
     /// Print (or install) a shell completion script
     Completions(CompletionsArgs),
     /// Manage persisted defaults and profiles (~/.config/vaqum/config.toml)
@@ -276,10 +283,94 @@ pub struct ListArgs {
 }
 
 #[derive(Parser)]
+#[command(
+    after_help = "Example:\n  vaqum secrets init\n  vaqum secrets set STRIPE_KEY\n  vaqum secrets add-member vqm1…teammate\n  vaqum run -- npm start"
+)]
+pub struct SecretsArgs {
+    /// Secrets file
+    #[arg(short = 'f', long, global = true, default_value = crate::secret_store::DEFAULT_FILE)]
+    pub file: PathBuf,
+
+    /// Your identity (default: your saved key, or $VAQUM_IDENTITY)
+    #[arg(short = 'i', long, global = true)]
+    pub identity: Option<PathBuf>,
+
+    #[command(subcommand)]
+    pub action: SecretsAction,
+}
+
+#[derive(Subcommand)]
+pub enum SecretsAction {
+    /// Create a new secrets file, with you as its first member
+    Init {
+        /// Also give these people access (their vqm1… public keys, or files)
+        #[arg(long = "to", value_name = "PUBKEY")]
+        members: Vec<String>,
+    },
+    /// Set a secret (asks for the value, or reads it from stdin)
+    Set { name: String },
+    /// Print a secret's value
+    Get { name: String },
+    /// List secret names (no key needed)
+    List,
+    /// Remove a secret
+    Rm { name: String },
+    /// Encrypt every NAME=value line of a plain .env file into the secrets file
+    Import { path: PathBuf },
+    /// Print all secrets as plain-text NAME=value lines
+    Export,
+    /// List the members who can open the file
+    Members,
+    /// Give someone access (their vqm1… public key, or a file containing it)
+    AddMember { pubkey: String },
+    /// Revoke someone's access and re-encrypt everything with a new key
+    RemoveMember { pubkey: String },
+}
+
+#[derive(Parser)]
+#[command(
+    after_help = "Example:\n  vaqum run -- npm start\n  vaqum run -f prod.env.vqm -- ./deploy.sh"
+)]
+pub struct RunArgs {
+    /// Secrets file
+    #[arg(short = 'f', long, default_value = crate::secret_store::DEFAULT_FILE)]
+    pub file: PathBuf,
+
+    /// Your identity (default: your saved key, or $VAQUM_IDENTITY)
+    #[arg(short = 'i', long)]
+    pub identity: Option<PathBuf>,
+
+    /// The command to run, after `--`
+    #[arg(
+        required = true,
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        value_name = "COMMAND"
+    )]
+    pub command: Vec<String>,
+}
+
+#[derive(Parser)]
 pub struct KeygenArgs {
     /// Where to save the identity (default: ~/.config/vaqum/identity)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+
+    /// Don't protect the key with a passphrase (for CI or other unattended
+    /// use, where the key is kept in a secret store instead)
+    #[arg(long)]
+    pub no_passphrase: bool,
+}
+
+#[derive(Parser)]
+pub struct PassphraseArgs {
+    /// Identity to change (default: your saved one)
+    #[arg(short = 'i', long)]
+    pub identity: Option<PathBuf>,
+
+    /// Remove the passphrase instead (leaves the key unprotected on disk)
+    #[arg(long)]
+    pub remove: bool,
 }
 
 #[derive(Parser)]

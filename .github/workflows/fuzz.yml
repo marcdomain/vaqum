@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [archive, tar_extract, names]
+        target: [archive, tar_extract, names, secrets_file]
     defaults:
       run:
         working-directory: fuzz

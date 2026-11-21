@@ -29,6 +29,13 @@ use crate::crypto::Key;
 
 const PUBLIC_PREFIX: &str = "vqm1";
 const IDENTITY_MARKER: &str = "VAQUM-IDENTITY-1";
+/// Passphrase-protected identity (see `Identity::render`).
+const PROTECTED_MARKER: &str = "VAQUM-IDENTITY-2";
+const PROTECTED_AAD: &[u8] = b"vaqum identity v2\n";
+/// Environment variables for unattended use (CI): the identity file's
+/// contents, and the passphrase of a protected one.
+pub const IDENTITY_ENV: &str = "VAQUM_IDENTITY";
+pub const PASSPHRASE_ENV: &str = "VAQUM_IDENTITY_PASSPHRASE";
 const MINISIGN_PK_LEN: usize = 42;
 const CHECKSUM_LEN: usize = 4;
 
@@ -169,7 +176,120 @@ impl Identity {
         )
     }
 
+    /// The identity as file text. With a passphrase, the secret keys are
+    /// sealed with ChaCha20-Poly1305 under an Argon2id key (64 MiB, 3
+    /// passes); the public key stays readable (and is bound into the seal),
+    /// so sharing it never needs the passphrase.
+    fn render(&self, passphrase: Option<&str>) -> Result<String> {
+        let Some(passphrase) = passphrase else {
+            return Ok(self.to_text());
+        };
+        let public = self.public.encode();
+        let payload = format!(
+            "encryption: {}\nsigning: {}\n",
+            Base64UrlSafeNoPadding::encode_to_string(self.x25519.to_bytes())
+                .expect("encoding can't fail"),
+            Base64UrlSafeNoPadding::encode_to_string(self.signing.to_bytes())
+                .expect("encoding can't fail"),
+        );
+        let salt = crate::crypto::random_salt();
+        let mut nonce = [0u8; 12];
+        rand::Rng::fill_bytes(&mut rand::rng(), &mut nonce);
+        let key = crate::crypto::derive_key(passphrase.as_bytes(), &salt, true)?;
+        let aad = [PROTECTED_AAD, public.as_bytes()].concat();
+        let sealed = ChaCha20Poly1305::new(&key)
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                chacha20poly1305::aead::Payload {
+                    msg: payload.as_bytes(),
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| anyhow::anyhow!("failed to seal the identity"))?;
+        let b64 =
+            |b: &[u8]| Base64UrlSafeNoPadding::encode_to_string(b).expect("encoding can't fail");
+        Ok(format!(
+            "# vaqum identity, protected by a passphrase. KEEP THIS FILE SECRET.\n\
+             # Your public key (safe to share): {public}\n\
+             {PROTECTED_MARKER}\n\
+             public: {public}\n\
+             salt: {}\n\
+             nonce: {}\n\
+             sealed: {}\n",
+            b64(&salt),
+            b64(&nonce),
+            b64(&sealed)
+        ))
+    }
+
+    /// Reads a field `name: value` from identity text.
+    fn field<'t>(text: &'t str, name: &str) -> Option<&'t str> {
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix(&format!("{name}:")))
+            .map(str::trim)
+    }
+
+    fn is_protected_text(text: &str) -> bool {
+        text.lines().any(|l| l.trim() == PROTECTED_MARKER)
+    }
+
+    /// Parses identity text, unlocking a protected one with the passphrase
+    /// from `VAQUM_IDENTITY_PASSPHRASE` or a terminal prompt.
     fn from_text(text: &str) -> Result<Self> {
+        if Self::is_protected_text(text) {
+            return Self::unlock(text);
+        }
+        Self::from_plain_text(text)
+    }
+
+    fn unlock(text: &str) -> Result<Self> {
+        let b64 = |name: &str| -> Result<Vec<u8>> {
+            let value = Self::field(text, name)
+                .with_context(|| format!("protected identity is missing its {name}"))?;
+            Base64UrlSafeNoPadding::decode_to_vec(value, None)
+                .ok()
+                .with_context(|| format!("protected identity's {name} is damaged"))
+        };
+        let public =
+            Self::field(text, "public").context("protected identity is missing its public key")?;
+        let salt: crate::crypto::Salt = b64("salt")?
+            .try_into()
+            .ok()
+            .context("protected identity's salt has the wrong length")?;
+        let nonce: [u8; 12] = b64("nonce")?
+            .try_into()
+            .ok()
+            .context("protected identity's nonce has the wrong length")?;
+        let sealed = b64("sealed")?;
+        let passphrase = match std::env::var(PASSPHRASE_ENV) {
+            Ok(p) if !p.is_empty() => p,
+            _ => crate::crypto::prompt_secret(
+                "Your key's passphrase: ",
+                "your key is protected and",
+            )?,
+        };
+        let key = crate::crypto::derive_key(passphrase.as_bytes(), &salt, true)?;
+        let aad = [PROTECTED_AAD, public.as_bytes()].concat();
+        let payload = ChaCha20Poly1305::new(&key)
+            .decrypt(
+                Nonce::from_slice(&nonce),
+                chacha20poly1305::aead::Payload {
+                    msg: &sealed,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| {
+                anyhow::anyhow!("wrong passphrase (or the identity file was tampered with)")
+            })?;
+        let payload = String::from_utf8(payload).context("protected identity is damaged")?;
+        let identity = Self::from_plain_text(&format!("{IDENTITY_MARKER}\n{payload}"))?;
+        if identity.public.encode() != public {
+            bail!("identity file is inconsistent: its public key doesn't match its secret key");
+        }
+        Ok(identity)
+    }
+
+    fn from_plain_text(text: &str) -> Result<Self> {
         if !text.lines().any(|l| l.trim() == IDENTITY_MARKER) {
             bail!("not a vaqum identity file (create one with `vaqum keygen`)");
         }
@@ -202,8 +322,10 @@ impl Identity {
         })
     }
 
-    /// Writes the identity, readable only by you, refusing to overwrite.
-    pub fn save(&self, path: &Path) -> Result<()> {
+    /// Writes the identity (passphrase-protected if one is given), readable
+    /// only by you, refusing to overwrite.
+    pub fn save(&self, path: &Path, passphrase: Option<&str>) -> Result<()> {
+        let text = self.render(passphrase)?;
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -222,26 +344,67 @@ impl Identity {
                 format!("failed to create {}", path.display())
             }
         })?;
-        std::io::Write::write_all(&mut file, self.to_text().as_bytes())?;
+        std::io::Write::write_all(&mut file, text.as_bytes())?;
         Ok(())
     }
 
-    pub fn load(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path).with_context(|| {
+    /// Replaces an existing identity file (e.g. to change its passphrase),
+    /// atomically and readable only by you.
+    pub fn rewrite(&self, path: &Path, passphrase: Option<&str>) -> Result<()> {
+        let text = self.render(passphrase)?;
+        let mut out = crate::util::AtomicFile::create(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(out.temp_path(), fs::Permissions::from_mode(0o600))?;
+        }
+        std::io::Write::write_all(out.file(), text.as_bytes())?;
+        out.commit()
+    }
+
+    /// The public key of an identity file, without unlocking it.
+    pub fn public_key_of(path: &Path) -> Result<PublicKey> {
+        let text = Self::read_text(path)?;
+        if Self::is_protected_text(&text) {
+            return PublicKey::parse(
+                Self::field(&text, "public")
+                    .context("protected identity is missing its public key")?,
+            );
+        }
+        Ok(Self::from_plain_text(&text)?.public)
+    }
+
+    /// Whether an identity file is passphrase-protected.
+    pub fn is_protected(path: &Path) -> Result<bool> {
+        Ok(Self::is_protected_text(&Self::read_text(path)?))
+    }
+
+    fn read_text(path: &Path) -> Result<String> {
+        fs::read_to_string(path).with_context(|| {
             format!(
                 "failed to read identity {} (create one with `vaqum keygen`)",
                 path.display()
             )
-        })?;
+        })
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let text = Self::read_text(path)?;
         Self::from_text(&text).with_context(|| format!("in {}", path.display()))
     }
 
-    /// `path`, or the default identity location.
+    /// `path`; else the identity in `VAQUM_IDENTITY` (for CI, where the key
+    /// lives in the CI's secret store); else the default location.
     pub fn load_or_default(path: Option<&Path>) -> Result<Self> {
-        match path {
-            Some(p) => Self::load(p),
-            None => Self::load(&default_identity_path()?),
+        if let Some(p) = path {
+            return Self::load(p);
         }
+        if let Ok(text) = std::env::var(IDENTITY_ENV)
+            && !text.trim().is_empty()
+        {
+            return Self::from_text(&text).context("in the VAQUM_IDENTITY environment variable");
+        }
+        Self::load(&default_identity_path()?)
     }
 }
 

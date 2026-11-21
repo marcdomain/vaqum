@@ -1,10 +1,12 @@
-# caption: <b>Encrypt for a person</b>: no shared password, just their public key
+# caption: <b>Your key, protected</b> by a passphrase that's never stored
 
 Type "vaqum keygen"
 Sleep 300ms
 Enter
-Sleep 3000ms
-Type "vaqum compress plans.txt --to $BOB --sign"
-Sleep 300ms
+Sleep 1200ms
+Type "orbit-velvet-meadow-42"
 Enter
-Sleep 4000ms
+Sleep 600ms
+Type "orbit-velvet-meadow-42"
+Enter
+Sleep 3500ms

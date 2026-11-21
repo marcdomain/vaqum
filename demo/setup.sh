@@ -83,8 +83,18 @@ printf '// TODO: add tests\npub fn helper() {}\n' > app/util.rs
   echo "Q4 launch plan"
   for i in $(seq 1 60); do echo "- milestone $i: owner, budget and review date for workstream $i"; done
 } > plans.txt
-"$BIN_DIR/vaqum" keygen -o bob.key >/dev/null
+"$BIN_DIR/vaqum" keygen --no-passphrase -o bob.key >/dev/null
 echo "export BOB=\"$("$BIN_DIR/vaqum" pubkey -i bob.key)\"" >> "$ZDOTDIR_DEMO/.zshrc"
+
+# secrets: a plain .env to import, and an app that uses it
+printf 'DATABASE_URL=postgres://app:s3cret@db.internal/prod\nSTRIPE_KEY=sk_live_51HdemoKey9xQ\nSENDGRID_KEY=SG.demo-key\n' > .env
+cat > app.sh <<'APP'
+#!/bin/sh
+echo "app: connected to ${DATABASE_URL%%@*}@… ✓"
+echo "app: payments ready (Stripe key ends …${STRIPE_KEY#${STRIPE_KEY%????}}) ✓"
+echo "app: no .env on disk: $(ls .env 2>/dev/null || echo 'none') ✓"
+APP
+chmod +x app.sh
 
 # huge file: shows the progress bar (3 GiB of logs; deleted after recording)
 # A varied 64 MiB block, repeated: the repeats sit beyond zstd's match

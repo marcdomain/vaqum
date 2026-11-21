@@ -103,7 +103,7 @@ pub fn scan_file(path: &Path, rel: &str) -> Vec<Warning> {
                 .map(|(_, what)| *what)
         });
     // `.env.example` and friends are templates, not secrets.
-    let is_template = ["example", "sample", "template", "dist"]
+    let is_template = ["example", "sample", "template", "dist", "vqm"]
         .iter()
         .any(|t| name.ends_with(&format!(".{t}")));
     if let Some(what) = by_name

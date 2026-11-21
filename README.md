@@ -15,6 +15,7 @@ Losslessly compress files 5x faster and 12% smaller output than zip/gzip at defa
 | Encrypt for a person | `keygen`, `compress --to` | No shared password: encrypt with someone's `vqm1…` public key, for one or many recipients |
 | Signatures | `sign`, `verify`, `compress --sign`, `decompress --from` | Prove who made an archive and that it wasn't changed (minisign format) |
 | Browser viewer | [marcdomain.github.io/vaqum](https://marcdomain.github.io/vaqum/) | Recipients without vaqum can open `.vqm` archives (including password-protected ones) in their browser; nothing is uploaded |
+| App secrets | `secrets`, `run` | An encrypted `.env` that's safe to commit (readable names, encrypted values, per-member access); `vaqum run` hands secrets to your app as environment variables, never written to disk |
 | Leak check | `compress` | Warns before you pack `.env` files, SSH keys, or AWS/GitHub/Stripe/OpenAI tokens (never prints them) |
 | Decompression | `decompress` | Auto-detects encryption, `--verify`, extract just some paths with `--only` (wildcards like `'*.rs'` work), also reads `.zip` and `.tar.gz`/`.tgz` |
 | Listing | `list` / `ls` | See what's inside an archive (`.vqm`, zip, tar.gz) without extracting it; `--json` for scripts |
@@ -44,10 +45,13 @@ cargo install --path .                            # from source
 vaqum compress <path>... [-o out] [-l 1-22] [--max] [-t threads] [-r] [--dedup] [--exclude <pattern>] [--profile <name>] [--dry-run] [-v] [-e] [--key-file <f>] [-q]
 vaqum decompress <archive.vqm|.zip|.tar.gz|-> [-o dir|-] [--only <path>]... [-v] [--verify] [--key-file <f>] [--max-ratio <n>] [--force] [-q]
 vaqum list <archive> [--json] [--key-file <f>] [-i identity] [-q]   # alias: ls
-vaqum keygen [-o identity]                                          # your personal key
+vaqum keygen [-o identity] [--no-passphrase]                        # your personal key (passphrase-protected)
+vaqum passphrase [-i identity] [--remove]                           # add, change or remove its passphrase
 vaqum pubkey [-i identity]                                          # print your public key to share
 vaqum sign <archive> [-i identity]                                  # writes <archive>.minisig
 vaqum verify <archive> --from <pubkey>
+vaqum secrets <init|set|get|list|rm|import|export|members|add-member|remove-member> [-f file]
+vaqum run [-f file] -- <command>                                    # run with secrets as env vars
 vaqum diff <a> <b> [--html report.html] [--open] [-e|--editor] [-v]   # files, dirs, or .vqm archives, any mix
 vaqum dedupe <dir> [--link] [--dry-run] [-t threads] [-v] [-q]        # find (and optionally hardlink) duplicate files
 vaqum shred <path> [-r] [-p passes] [-y] [--dry-run] [-q]
@@ -101,6 +105,31 @@ vaqum verify plans.vqm --from vqm1…you                                # or jus
 `--to` also accepts a file containing the key. Your own identity is used automatically to open archives sent to you (`-i` picks another). Signatures are standard minisign files (`plans.vqm.minisig`), sent alongside the archive. `decompress --from` refuses to extract anything unless the signature matches.
 
 When you compress, vaqum also checks what you're packing for things that look like secrets (`.env` files, SSH keys, `.pem` files, AWS/GitHub/Stripe/OpenAI/Anthropic tokens, and more) and warns you, without printing the secret itself. Leave them out with `--exclude`, encrypt with `-e` or `--to`, or skip the check with `--no-secret-check`.
+
+### App secrets: an encrypted `.env` you can commit
+
+```sh
+vaqum secrets init                       # creates .env.vqm, with you as its first member
+vaqum secrets import .env                # encrypt an existing .env (then delete the plain one)
+vaqum secrets set STRIPE_KEY             # add or change one (asks for the value, or reads stdin)
+vaqum secrets add-member vqm1…teammate   # share with a teammate
+vaqum run -- npm start                   # start your app with the secrets as environment variables
+```
+
+The file keeps names and members readable and values encrypted, so it's safe to commit and pull requests still show *which* secret changed:
+
+```
+member: vqm1…alice
+DATABASE_URL=vqm:X5kJa-jlHya0…
+STRIPE_KEY=vqm:m4wvk94VLnqi…
+```
+
+- Only members can read values. Any edit by a non-member (changing, moving, renaming or deleting a secret, or adding themselves as a member) is detected and refused.
+- `vaqum run` decrypts in memory and passes the secrets to your app as environment variables; no plain-text `.env` is written. Apps that read `process.env` / `os.environ`, or load `.env` through a dotenv library, work unchanged.
+- `remove-member` re-encrypts everything under a new key, and reminds you to rotate the secrets, since a removed member may have kept copies.
+- In CI, put a dedicated key (made with `vaqum keygen --no-passphrase`) in the CI's secret store as `VAQUM_IDENTITY`, or a protected key plus `VAQUM_IDENTITY_PASSPHRASE`.
+
+Your key itself is protected by a passphrase (asked once per command, never stored); `vaqum passphrase` adds, changes or removes it, and `vaqum pubkey` never needs it.
 
 ### Opening archives without installing anything
 

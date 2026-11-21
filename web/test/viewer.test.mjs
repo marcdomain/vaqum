@@ -105,7 +105,7 @@ test("opens archives encrypted by vaqum 1.2.5 (older key settings)", () => {
 });
 
 test("recipient archives point people to the CLI", () => {
-  vaqum("keygen");
+  vaqum("keygen", "--no-passphrase");
   const me = vaqum("pubkey").toString().trim();
   vaqum("compress", path.join(src, "a.txt"), "--to", me, "-o", "to.vqm");
   const result = viewer.open(fs.readFileSync(path.join(tmp, "to.vqm")));

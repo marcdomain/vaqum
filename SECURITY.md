@@ -39,10 +39,14 @@ Archives encrypted for recipients follow age's X25519 recipient design
 | Per recipient | An ephemeral X25519 exchange; HKDF-SHA256 derives a wrap key that seals the file key with ChaCha20-Poly1305 |
 | Header | HMAC-SHA256 (keyed from the file key) over every header byte, so names, sizes and the recipient list can't be altered |
 
-The identity file holds your secret keys, unencrypted, readable only by
-you (mode 600). Treat it like an SSH private key: back it up, never share
-it. Public keys (`vqm1…`) carry a checksum, so a mistyped key is refused
-rather than silently encrypting to the wrong key.
+The identity file holds your secret keys. By default `vaqum keygen` seals
+them with a passphrase: ChaCha20-Poly1305 under an Argon2id key (64 MiB,
+3 passes, random salt), with the public key bound in as associated data,
+so a swapped public key or any edit is detected. The file is readable only
+by you (mode 600). Keys made with `--no-passphrase` (for CI) are stored
+unsealed, like an unprotected SSH key. Public keys (`vqm1…`) carry a
+checksum, so a mistyped key is refused rather than silently encrypting to
+the wrong key.
 
 ### Signatures
 
@@ -62,6 +66,31 @@ public key; `decompress --from` extracts nothing unless it matches.
   or the checksum no longer matches.
 - Encryption is only as strong as the password. vaqum warns about weak
   passwords; a long random key file (`--key-file`) avoids the problem.
+
+## App secrets (`vaqum secrets`, `vaqum run`)
+
+A secrets file (`.env.vqm`) keeps names and members readable and values
+encrypted:
+
+| Part | Choice |
+| --- | --- |
+| Access | A random 32-byte file key, wrapped for each member exactly like `--to` archives |
+| Values | ChaCha20-Poly1305 under a key derived from the file key, a random nonce per value, and the secret's name as associated data (a value can't be moved to another name) |
+| Integrity | HMAC-SHA256 keyed from the file key over the marker, members, wrapped keys and every entry in order |
+
+What that guarantees: someone without a member's key (and its passphrase)
+can't read any value, and can't change, move, rename, add or remove
+anything, or add themselves as a member, without the file being refused.
+Removing a member re-encrypts everything under a new file key.
+
+What it can't guarantee:
+- A removed member may already have the values (and git history keeps
+  older versions of the file), so rotate the secrets they could read.
+- Members can edit the file; signatures (`vaqum sign`) record who did.
+- `vaqum run` gives the secrets to the command you start, as environment
+  variables; that program (and anything that can inspect its environment,
+  such as the same user or an administrator) can read them.
+- Malware running as you can capture your passphrase as you type it.
 
 ## Leak check
 

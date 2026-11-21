@@ -2,7 +2,7 @@
 
 use anyhow::{Result, bail};
 
-use crate::cli::{KeygenArgs, PubkeyArgs, SignArgs, VerifyArgs};
+use crate::cli::{KeygenArgs, PassphraseArgs, PubkeyArgs, SignArgs, VerifyArgs};
 use crate::keys::{Identity, PublicKey, default_identity_path};
 use crate::sign;
 
@@ -11,11 +11,29 @@ pub fn keygen(args: KeygenArgs) -> Result<()> {
         Some(p) => p,
         None => default_identity_path()?,
     };
+    if path.exists() {
+        bail!(
+            "{} already exists; refusing to overwrite a key (pass a different -o path)",
+            path.display()
+        );
+    }
+    let passphrase = if args.no_passphrase {
+        None
+    } else {
+        println!("Choose a passphrase to protect your key (it's never stored anywhere):");
+        Some(crate::crypto::prompt_new_passphrase(
+            "creating a protected key",
+        )?)
+    };
     let identity = Identity::generate()?;
-    identity.save(&path)?;
+    identity.save(&path, passphrase.as_deref())?;
     println!("✔ Created your key: {}", path.display());
-    println!("  Keep this file secret, and back it up:");
-    println!("  without it, archives sent to you can't be opened.");
+    if passphrase.is_some() {
+        println!("  Protected by your passphrase. Back the file up: without it (and the");
+        println!("  passphrase), archives sent to you can't be opened.");
+    } else {
+        println!("  Not protected by a passphrase: keep this file secret, and back it up.");
+    }
     println!();
     println!("  Your public key (share it freely):");
     println!("  {}", identity.public().encode());
@@ -26,8 +44,44 @@ pub fn keygen(args: KeygenArgs) -> Result<()> {
 }
 
 pub fn pubkey(args: PubkeyArgs) -> Result<()> {
-    let identity = Identity::load_or_default(args.identity.as_deref())?;
-    println!("{}", identity.public().encode());
+    // Never needs the passphrase: the public key is stored readable.
+    let public = match args.identity.as_deref() {
+        Some(path) => Identity::public_key_of(path)?,
+        None => match std::env::var(crate::keys::IDENTITY_ENV) {
+            Ok(text) if !text.trim().is_empty() => {
+                Identity::load_or_default(None)?.public().clone()
+            }
+            _ => Identity::public_key_of(&default_identity_path()?)?,
+        },
+    };
+    println!("{}", public.encode());
+    Ok(())
+}
+
+pub fn passphrase(args: PassphraseArgs) -> Result<()> {
+    let path = match args.identity {
+        Some(p) => p,
+        None => default_identity_path()?,
+    };
+    let was_protected = Identity::is_protected(&path)?;
+    let identity = Identity::load(&path)?;
+    if args.remove {
+        if !was_protected {
+            println!("{} has no passphrase; nothing to do.", path.display());
+            return Ok(());
+        }
+        identity.rewrite(&path, None)?;
+        println!("✔ Removed the passphrase from {}", path.display());
+        println!("  The key is now unprotected on disk: keep the file secret.");
+        return Ok(());
+    }
+    let new = crate::crypto::prompt_new_passphrase("setting a passphrase")?;
+    identity.rewrite(&path, Some(&new))?;
+    println!(
+        "✔ {} the passphrase on {}",
+        if was_protected { "Changed" } else { "Set" },
+        path.display()
+    );
     Ok(())
 }
 

@@ -302,6 +302,29 @@ pub fn prompt_new_password() -> Result<String> {
     Ok(password)
 }
 
+/// Asks for an existing secret with a custom prompt (e.g. a key passphrase).
+pub fn prompt_secret(prompt: &str, needed_for: &str) -> Result<String> {
+    ensure_interactive(needed_for)?;
+    rpassword::prompt_password(prompt).context("failed to read passphrase")
+}
+
+/// Asks for a new passphrase twice, warning if it looks weak.
+pub fn prompt_new_passphrase(needed_for: &str) -> Result<String> {
+    ensure_interactive(needed_for)?;
+    let passphrase =
+        rpassword::prompt_password("New passphrase: ").context("failed to read passphrase")?;
+    if passphrase.is_empty() {
+        bail!("the passphrase can't be empty (use --no-passphrase for an unprotected key)");
+    }
+    let confirm =
+        rpassword::prompt_password("Confirm passphrase: ").context("failed to read passphrase")?;
+    if passphrase != confirm {
+        bail!("passphrases did not match");
+    }
+    warn_if_weak(&passphrase);
+    Ok(passphrase)
+}
+
 pub fn prompt_existing_password() -> Result<String> {
     ensure_interactive("this archive is encrypted and")?;
     rpassword::prompt_password("Enter password: ").context("failed to read password")

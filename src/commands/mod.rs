@@ -8,4 +8,5 @@ pub mod info;
 pub mod keys;
 pub mod list;
 pub mod search;
+pub mod secrets;
 pub mod shred;

@@ -18,6 +18,7 @@ pub mod keys;
 pub mod origin;
 pub mod progress;
 pub mod risk;
+pub mod secret_store;
 pub mod secrets;
 pub mod sign;
 pub mod util;

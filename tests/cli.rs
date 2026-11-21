@@ -3327,7 +3327,12 @@ struct Person {
 fn person(dir: &std::path::Path, name: &str) -> Person {
     let identity = dir.join(format!("{name}.key"));
     vaqum()
-        .args(["keygen", "-o", identity.to_str().unwrap()])
+        .args([
+            "keygen",
+            "--no-passphrase",
+            "-o",
+            identity.to_str().unwrap(),
+        ])
         .assert()
         .success();
     let out = vaqum()
@@ -3361,7 +3366,12 @@ fn keygen_creates_a_private_identity_and_refuses_to_overwrite() {
     }
     let before = fs::read(&alice.identity).unwrap();
     vaqum()
-        .args(["keygen", "-o", alice.identity.to_str().unwrap()])
+        .args([
+            "keygen",
+            "--no-passphrase",
+            "-o",
+            alice.identity.to_str().unwrap(),
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("refusing to overwrite"));
@@ -3377,7 +3387,10 @@ fn keygen_defaults_to_the_config_dir_and_is_used_automatically() {
         c.env("XDG_CONFIG_HOME", &cfg).env("APPDATA", &cfg);
         c
     };
-    with_cfg().arg("keygen").assert().success();
+    with_cfg()
+        .args(["keygen", "--no-passphrase"])
+        .assert()
+        .success();
     let me = String::from_utf8(with_cfg().arg("pubkey").output().unwrap().stdout).unwrap();
     let input = sample_input(dir.path());
     let archive = dir.path().join("p.vqm");
@@ -4002,7 +4015,12 @@ fn every_mode_round_trips_tricky_inputs_byte_for_byte() {
     fs::write(&key, "integrity key").unwrap();
     let identity = dir.path().join("me.key");
     vaqum()
-        .args(["keygen", "-o", identity.to_str().unwrap()])
+        .args([
+            "keygen",
+            "--no-passphrase",
+            "-o",
+            identity.to_str().unwrap(),
+        ])
         .assert()
         .success();
     let me = String::from_utf8(
@@ -4296,11 +4314,12 @@ fn run_in_terminal(args: &[&str], answers: &[&str]) -> (Option<i32>, String) {
             Ok(n) => seen.extend_from_slice(&buf[..n]),
         }
         let last_line = seen.rsplit(|&b| b == b'\n').next().unwrap_or_default();
-        if answered < answers.len()
-            && String::from_utf8_lossy(last_line)
-                .to_lowercase()
-                .contains("password:")
-        {
+        if answered < answers.len() && {
+            let line = String::from_utf8_lossy(last_line).to_lowercase();
+            line.contains("password:") || line.contains("passphrase:") || line.contains("value for")
+        } {
+            // Pause before typing, as a person would.
+            std::thread::sleep(std::time::Duration::from_millis(300));
             master
                 .write_all(format!("{}\n", answers[answered]).as_bytes())
                 .unwrap();
@@ -4368,8 +4387,11 @@ fn run_in_terminal(args: &[&str], answers: &[&str]) -> (Option<i32>, String) {
             writer.write_all(b"\x1b[1;1R").unwrap();
             cursor_replies += 1;
         }
-        let prompts = text.matches("password:").count();
+        let prompts = text.matches("password:").count()
+            + text.matches("passphrase:").count()
+            + text.matches("value for").count();
         while answered < answers.len() && answered < prompts {
+            std::thread::sleep(Duration::from_millis(300));
             writer
                 .write_all(format!("{}\r", answers[answered]).as_bytes())
                 .unwrap();
@@ -4445,4 +4467,529 @@ fn typed_password_at_a_terminal_encrypts_and_decrypts() {
         fs::read_to_string(out.join("secret.txt")).unwrap(),
         "typed at a terminal\n"
     );
+}
+
+// ---------------------------------------------------------------------
+// passphrase-protected identities
+// ---------------------------------------------------------------------
+
+/// Creates a passphrase-protected identity by typing at a real terminal.
+fn protected_identity(dir: &std::path::Path, passphrase: &str) -> std::path::PathBuf {
+    let identity = dir.join("me.key");
+    let (code, transcript) = run_in_terminal(
+        &["keygen", "-o", identity.to_str().unwrap()],
+        &[passphrase, passphrase],
+    );
+    assert_eq!(code, Some(0), "keygen failed:\n{transcript}");
+    identity
+}
+
+#[test]
+fn protected_identity_keeps_secrets_sealed_and_needs_the_passphrase() {
+    let dir = TempDir::new().unwrap();
+    let pass = "orbit-velvet-meadow-42";
+    let identity = protected_identity(dir.path(), pass);
+    let text = fs::read_to_string(&identity).unwrap();
+    assert!(text.contains("VAQUM-IDENTITY-2"));
+    assert!(
+        !text.contains("encryption:") && !text.contains("signing:"),
+        "secret keys must not be stored readable"
+    );
+
+    // The public key never needs the passphrase.
+    let me = String::from_utf8(
+        vaqum()
+            .args(["pubkey", "-i", identity.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let me = me.trim();
+    assert!(me.starts_with("vqm1"));
+
+    let input = sample_input(dir.path());
+    let archive = dir.path().join("p.vqm");
+    vaqum()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "--to",
+            me,
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let open = |pass: Option<&str>| {
+        let mut cmd = vaqum();
+        cmd.args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-i",
+            identity.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ]);
+        if let Some(p) = pass {
+            cmd.env("VAQUM_IDENTITY_PASSPHRASE", p);
+        }
+        cmd.timeout(std::time::Duration::from_secs(30)).assert()
+    };
+    open(Some("not the passphrase"))
+        .failure()
+        .stderr(predicate::str::contains("wrong passphrase"));
+    open(None)
+        .failure()
+        .stderr(predicate::str::contains("no terminal"));
+    open(Some(pass)).success();
+    assert_eq!(
+        fs::read(&input).unwrap(),
+        fs::read(out.join("plans.txt")).unwrap()
+    );
+}
+
+#[test]
+fn keygen_without_a_terminal_requires_an_explicit_choice() {
+    let dir = TempDir::new().unwrap();
+    vaqum()
+        .args(["keygen", "-o", dir.path().join("k").to_str().unwrap()])
+        .timeout(std::time::Duration::from_secs(20))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no terminal"));
+    assert!(!dir.path().join("k").exists());
+}
+
+#[test]
+fn protected_identity_resists_tampering() {
+    let dir = TempDir::new().unwrap();
+    let pass = "harbor-lantern-91";
+    let identity = protected_identity(dir.path(), pass);
+    let other = person(dir.path(), "other");
+    // An attacker swaps in their own public key, hoping files get encrypted to them.
+    let text = fs::read_to_string(&identity).unwrap();
+    let mine = text
+        .lines()
+        .find_map(|l| l.strip_prefix("public: "))
+        .unwrap()
+        .to_string();
+    fs::write(&identity, text.replace(&mine, &other.public)).unwrap();
+    vaqum()
+        .args([
+            "secrets",
+            "init",
+            "-f",
+            dir.path().join("x.vqm").to_str().unwrap(),
+            "-i",
+            identity.to_str().unwrap(),
+        ])
+        .assert()
+        .success(); // reading the public key needs no passphrase...
+    let mut cmd = vaqum();
+    cmd.args([
+        "secrets",
+        "list",
+        "-f",
+        dir.path().join("x.vqm").to_str().unwrap(),
+    ]);
+    cmd.assert().success();
+    // ...but unlocking detects the swap: the public key is bound into the seal.
+    vaqum()
+        .args([
+            "secrets",
+            "get",
+            "X",
+            "-f",
+            dir.path().join("x.vqm").to_str().unwrap(),
+            "-i",
+            identity.to_str().unwrap(),
+        ])
+        .env("VAQUM_IDENTITY_PASSPHRASE", pass)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "wrong passphrase (or the identity file was tampered with)",
+        ));
+}
+
+#[test]
+fn passphrase_can_be_changed_and_removed() {
+    let dir = TempDir::new().unwrap();
+    let identity = protected_identity(dir.path(), "first-passphrase-11");
+    let id = identity.to_str().unwrap();
+    let (code, t) = run_in_terminal(
+        &["passphrase", "-i", id],
+        &[
+            "first-passphrase-11",
+            "second-passphrase-22",
+            "second-passphrase-22",
+        ],
+    );
+    assert_eq!(code, Some(0), "{t}");
+    let unlock = |p: &str| {
+        vaqum()
+            .args([
+                "secrets",
+                "init",
+                "-f",
+                dir.path().join(format!("{p}.vqm")).to_str().unwrap(),
+                "-i",
+                id,
+            ])
+            .assert()
+            .success()
+    };
+    unlock("check"); // public key path still works
+    vaqum()
+        .args(["passphrase", "-i", id, "--remove"])
+        .env("VAQUM_IDENTITY_PASSPHRASE", "first-passphrase-11")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("wrong passphrase"));
+    vaqum()
+        .args(["passphrase", "-i", id, "--remove"])
+        .env("VAQUM_IDENTITY_PASSPHRASE", "second-passphrase-22")
+        .assert()
+        .success();
+    assert!(
+        fs::read_to_string(&identity)
+            .unwrap()
+            .contains("VAQUM-IDENTITY-1")
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&identity).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+}
+
+// ---------------------------------------------------------------------
+// vaqum secrets / vaqum run
+// ---------------------------------------------------------------------
+
+struct Vault {
+    dir: TempDir,
+    alice: Person,
+    bob: Person,
+    file: std::path::PathBuf,
+}
+
+/// Alice creates a secrets file shared with Bob, holding three secrets.
+fn vault() -> Vault {
+    let dir = TempDir::new().unwrap();
+    let (alice, bob) = (person(dir.path(), "alice"), person(dir.path(), "bob"));
+    let file = dir.path().join(".env.vqm");
+    let env = dir.path().join(".env");
+    fs::write(&env, "DATABASE_URL=postgres://app:hunter2@db/prod\nSTRIPE_KEY=\"sk live 123\"\nexport API_TOKEN=tok_xyz\n").unwrap();
+    let f = file.to_str().unwrap();
+    vaqum()
+        .args([
+            "secrets",
+            "init",
+            "-f",
+            f,
+            "-i",
+            alice.identity.to_str().unwrap(),
+            "--to",
+            &bob.public,
+        ])
+        .assert()
+        .success();
+    vaqum()
+        .args([
+            "secrets",
+            "import",
+            env.to_str().unwrap(),
+            "-f",
+            f,
+            "-i",
+            alice.identity.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    Vault {
+        dir,
+        alice,
+        bob,
+        file,
+    }
+}
+
+fn secret(v: &Vault, who: &Person, name: &str) -> assert_cmd::assert::Assert {
+    vaqum()
+        .args([
+            "secrets",
+            "get",
+            name,
+            "-f",
+            v.file.to_str().unwrap(),
+            "-i",
+            who.identity.to_str().unwrap(),
+        ])
+        .assert()
+}
+
+#[test]
+fn secrets_round_trip_for_every_member_and_stay_encrypted_on_disk() {
+    let v = vault();
+    let text = fs::read_to_string(&v.file).unwrap();
+    for plain in ["hunter2", "sk live 123", "tok_xyz"] {
+        assert!(!text.contains(plain), "{plain} is readable in the file");
+    }
+    assert!(
+        text.contains("DATABASE_URL=vqm:") && text.contains(&v.bob.public),
+        "names and members stay readable"
+    );
+    for who in [&v.alice, &v.bob] {
+        secret(&v, who, "STRIPE_KEY")
+            .success()
+            .stdout("sk live 123\n");
+    }
+    vaqum()
+        .args(["secrets", "list", "-f", v.file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout("DATABASE_URL\nSTRIPE_KEY\nAPI_TOKEN\n");
+    // set from stdin, rm, export
+    let f = v.file.to_str().unwrap();
+    let id = v.alice.identity.to_str().unwrap();
+    vaqum()
+        .args(["secrets", "set", "NEW_ONE", "-f", f, "-i", id])
+        .write_stdin("multi\nline value\n")
+        .assert()
+        .success();
+    secret(&v, &v.bob, "NEW_ONE")
+        .success()
+        .stdout("multi\nline value\n");
+    vaqum()
+        .args(["secrets", "rm", "API_TOKEN", "-f", f, "-i", id])
+        .assert()
+        .success();
+    vaqum()
+        .args(["secrets", "export", "-f", f, "-i", id])
+        .assert()
+        .success()
+        .stdout("DATABASE_URL=postgres://app:hunter2@db/prod\nSTRIPE_KEY=\"sk live 123\"\nNEW_ONE=\"multi\\nline value\"\n");
+}
+
+#[test]
+fn non_members_get_nothing() {
+    let v = vault();
+    let eve = person(v.dir.path(), "eve");
+    secret(&v, &eve, "STRIPE_KEY")
+        .failure()
+        .stderr(predicate::str::contains("not a member"));
+    vaqum()
+        .args([
+            "run",
+            "-f",
+            v.file.to_str().unwrap(),
+            "-i",
+            eve.identity.to_str().unwrap(),
+            "--",
+            "true",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn every_kind_of_tampering_is_detected() {
+    let v = vault();
+    let original = fs::read_to_string(&v.file).unwrap();
+    let eve = person(v.dir.path(), "eve");
+    let line = |prefix: &str| {
+        original
+            .lines()
+            .find(|l| l.starts_with(prefix))
+            .unwrap()
+            .to_string()
+    };
+    let attacks: Vec<(&str, String)> = vec![
+        (
+            "flip a value byte",
+            original.replacen("STRIPE_KEY=vqm:", "STRIPE_KEY=vqm:A", 1),
+        ),
+        ("swap two values between names", {
+            let (a, b) = (line("DATABASE_URL="), line("API_TOKEN="));
+            let a_val = a.split_once('=').unwrap().1;
+            let b_val = b.split_once('=').unwrap().1;
+            original
+                .replace(&a, &format!("DATABASE_URL={b_val}"))
+                .replace(&b, &format!("API_TOKEN={a_val}"))
+        }),
+        (
+            "delete a secret",
+            original.replace(&format!("{}\n", line("API_TOKEN=")), ""),
+        ),
+        ("add yourself as a member", {
+            let fake = format!(
+                "member: {}\nkey: {}\n",
+                eve.public,
+                line("key: ").trim_start_matches("key: ")
+            );
+            original.replacen("VQM-SECRETS-1\n", &format!("VQM-SECRETS-1\n{fake}"), 1)
+        }),
+        (
+            "rename a secret",
+            original.replacen("API_TOKEN=", "ADMIN_TOKEN=", 1),
+        ),
+        (
+            "drop the MAC",
+            original
+                .lines()
+                .filter(|l| !l.starts_with("mac:"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+    ];
+    for (what, text) in attacks {
+        assert_ne!(text, original, "{what}: attack didn't change the file");
+        fs::write(&v.file, &text).unwrap();
+        let out = vaqum()
+            .args([
+                "secrets",
+                "export",
+                "-f",
+                v.file.to_str().unwrap(),
+                "-i",
+                v.alice.identity.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{what}: tampering went undetected");
+        assert!(
+            out.stdout.is_empty(),
+            "{what}: secrets were printed from a tampered file"
+        );
+    }
+}
+
+#[test]
+fn removing_a_member_locks_them_out_of_the_new_version_and_warns_to_rotate() {
+    let v = vault();
+    let f = v.file.to_str().unwrap();
+    let before = fs::read_to_string(&v.file).unwrap();
+    vaqum()
+        .args([
+            "secrets",
+            "remove-member",
+            &v.bob.public,
+            "-f",
+            f,
+            "-i",
+            v.alice.identity.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rotate any secret"));
+    secret(&v, &v.bob, "STRIPE_KEY")
+        .failure()
+        .stderr(predicate::str::contains("not a member"));
+    secret(&v, &v.alice, "STRIPE_KEY")
+        .success()
+        .stdout("sk live 123\n");
+    // Everything was re-encrypted under a new key: no ciphertext survives.
+    let after = fs::read_to_string(&v.file).unwrap();
+    for name in ["DATABASE_URL", "STRIPE_KEY", "API_TOKEN"] {
+        let old = before.lines().find(|l| l.starts_with(name)).unwrap();
+        assert!(!after.contains(old), "{name} wasn't re-encrypted");
+    }
+    // Adding back works; removing the last member is refused.
+    vaqum()
+        .args([
+            "secrets",
+            "add-member",
+            &v.bob.public,
+            "-f",
+            f,
+            "-i",
+            v.alice.identity.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    secret(&v, &v.bob, "STRIPE_KEY").success();
+}
+
+#[test]
+fn run_passes_secrets_as_environment_and_returns_the_exit_code() {
+    let v = vault();
+    let f = v.file.to_str().unwrap();
+    let id = v.alice.identity.to_str().unwrap();
+    let run = |cmd: &[&str]| {
+        let mut args = vec!["run", "-f", f, "-i", id, "--"];
+        args.extend_from_slice(cmd);
+        vaqum().args(&args).output().unwrap()
+    };
+    // Simple, quoting-free commands on each platform.
+    let (env_cmd, exit_cmd): (&[&str], &[&str]) = if cfg!(windows) {
+        (&["cmd", "/C", "set"], &["cmd", "/C", "exit", "7"])
+    } else {
+        (&["env"], &["sh", "-c", "exit 7"])
+    };
+    let out = run(env_cmd);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let env = String::from_utf8_lossy(&out.stdout);
+    for line in [
+        "DATABASE_URL=postgres://app:hunter2@db/prod",
+        "STRIPE_KEY=sk live 123",
+        "API_TOKEN=tok_xyz",
+    ] {
+        assert!(
+            env.lines().any(|l| l.trim_end() == line),
+            "{line} missing from the environment:\n{env}"
+        );
+    }
+    assert_eq!(
+        run(exit_cmd).status.code(),
+        Some(7),
+        "the command's exit code must come back"
+    );
+}
+
+#[test]
+fn ci_can_supply_the_identity_through_the_environment() {
+    let v = vault();
+    let identity_text = fs::read_to_string(&v.bob.identity).unwrap();
+    vaqum()
+        .args([
+            "secrets",
+            "get",
+            "API_TOKEN",
+            "-f",
+            v.file.to_str().unwrap(),
+        ])
+        .env("VAQUM_IDENTITY", identity_text)
+        .assert()
+        .success()
+        .stdout("tok_xyz\n");
+}
+
+#[test]
+fn leak_check_does_not_flag_an_encrypted_secrets_file() {
+    let v = vault();
+    let project = v.dir.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    fs::copy(&v.file, project.join(".env.vqm")).unwrap();
+    let out = vaqum()
+        .args([
+            "compress",
+            project.to_str().unwrap(),
+            "-r",
+            "-o",
+            v.dir.path().join("p.vqm").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("Possible secrets"));
 }
