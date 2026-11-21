@@ -75,7 +75,7 @@ jobs:
       - name: Test it
         run: |
           cargo build --locked
-          VAQUM_BIN=target/debug/vaqum node --test web/test/
+          VAQUM_BIN=target/debug/vaqum node --test web/test/viewer.test.mjs
 
   npm-test:
     name: npm-test (${{ matrix.os }})

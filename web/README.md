@@ -25,7 +25,7 @@ python3 -m http.server -d site 8000      # then open http://localhost:8000
 
 ```sh
 cargo build                                    # from the repo root
-VAQUM_BIN=target/debug/vaqum node --test web/test/
+VAQUM_BIN=target/debug/vaqum node --test web/test/viewer.test.mjs
 ```
 
 The tests open archives made by the real CLI (every format variant,
