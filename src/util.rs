@@ -31,8 +31,13 @@ pub fn format_time(t: std::time::SystemTime) -> String {
 /// Stream a file and compute its SHA-256 digest and length without loading
 /// it entirely into memory.
 pub fn hash_file(path: &Path) -> Result<(u64, [u8; 32])> {
-    let mut file =
-        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    hash_file_with_progress(path, &ProgressBar::hidden())
+}
+
+/// [`hash_file`], advancing `bar` as it reads.
+pub fn hash_file_with_progress(path: &Path, bar: &ProgressBar) -> Result<(u64, [u8; 32])> {
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut file = crate::progress::ProgressReader::new(file, bar.clone());
     let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
     let mut buf = [0u8; 64 * 1024];
     let mut total = 0u64;
@@ -83,13 +88,7 @@ pub fn hash_tree(
         .min_depth(1)
         .sort_by_file_name()
         .into_iter()
-        .filter_entry(|e| {
-            let rel = e
-                .path()
-                .strip_prefix(root)
-                .expect("walkdir entries are under root");
-            !exclude.is_some_and(|ex| ex.is_excluded(&to_posix_path(rel), e.file_type().is_dir()))
-        });
+        .filter_entry(|e| !exclude.is_some_and(|ex| ex.excludes(root, e)));
 
     for entry in walker {
         let entry = entry.with_context(|| format!("failed to walk {}", root.display()))?;
@@ -258,6 +257,40 @@ pub fn prompt_line(prompt: &str) -> Result<String> {
     Ok(input.trim().to_string())
 }
 
+/// Temp files being written right now, so an interrupt (Ctrl-C) can
+/// remove them instead of leaving half-written files behind.
+static IN_PROGRESS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+fn track(path: &Path) {
+    IN_PROGRESS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(path.to_path_buf());
+}
+
+fn untrack(path: &Path) {
+    IN_PROGRESS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|p| p != path);
+}
+
+/// On Ctrl-C: delete in-progress temp files, then exit with the usual
+/// interrupted status (130). Call once at startup.
+pub fn install_interrupt_cleanup() {
+    let _ = ctrlc::set_handler(|| {
+        for path in IN_PROGRESS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+        {
+            let _ = fs::remove_file(path);
+        }
+        eprintln!("\ninterrupted; nothing half-written was left behind");
+        std::process::exit(130);
+    });
+}
+
 /// Writes a file safely: data goes to a new, randomly named temp file next
 /// to `dest` (created exclusively, so a pre-planted file or symlink can't
 /// hijack it), which is renamed over `dest` only on [`AtomicFile::commit`].
@@ -290,6 +323,7 @@ impl AtomicFile {
                 .open(&tmp)
             {
                 Ok(file) => {
+                    track(&tmp);
                     return Ok(Self {
                         tmp,
                         dest: dest.to_path_buf(),
@@ -310,6 +344,11 @@ impl AtomicFile {
         )
     }
 
+    /// The temp file's path (until it's committed).
+    pub fn temp_path(&self) -> &Path {
+        &self.tmp
+    }
+
     pub fn file(&mut self) -> &mut File {
         self.file.as_mut().expect("file is open until commit")
     }
@@ -320,9 +359,14 @@ impl AtomicFile {
             use std::io::Write;
             let mut file = file;
             file.flush()?;
+            // Durable before it becomes visible: a crash after the rename
+            // must never leave a truncated file under the final name.
+            file.sync_all()
+                .with_context(|| format!("failed to write {}", self.dest.display()))?;
         }
         fs::rename(&self.tmp, &self.dest)
             .with_context(|| format!("failed to write {}", self.dest.display()))?;
+        untrack(&self.tmp);
         self.tmp = PathBuf::new();
         Ok(())
     }
@@ -333,6 +377,7 @@ impl Drop for AtomicFile {
         self.file.take();
         if !self.tmp.as_os_str().is_empty() {
             let _ = fs::remove_file(&self.tmp);
+            untrack(&self.tmp);
         }
     }
 }

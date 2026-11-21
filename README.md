@@ -12,6 +12,10 @@ Losslessly compress files 5x faster and 12% smaller output than zip/gzip at defa
 | --- | --- | --- |
 | Compression | `compress` | Lossless, levels 1–22 (`--max`), multithreaded, bundles multiple files/dirs into one archive, `--dedup`, `--exclude` / `.vaqumignore`, `--dry-run` |
 | Encryption | `compress -e` / `--key-file` | ChaCha20-Poly1305 with an Argon2id-derived password or keyfile; only the salt is stored |
+| Encrypt for a person | `keygen`, `compress --to` | No shared password: encrypt with someone's `vqm1…` public key, for one or many recipients |
+| Signatures | `sign`, `verify`, `compress --sign`, `decompress --from` | Prove who made an archive and that it wasn't changed (minisign format) |
+| Browser viewer | [marcdomain.github.io/vaqum](https://marcdomain.github.io/vaqum/) | Recipients without vaqum can open `.vqm` archives (including password-protected ones) in their browser; nothing is uploaded |
+| Leak check | `compress` | Warns before you pack `.env` files, SSH keys, or AWS/GitHub/Stripe/OpenAI tokens (never prints them) |
 | Decompression | `decompress` | Auto-detects encryption, `--verify`, extract just some paths with `--only` (wildcards like `'*.rs'` work), also reads `.zip` and `.tar.gz`/`.tgz` |
 | Listing | `list` / `ls` | See what's inside an archive (`.vqm`, zip, tar.gz) without extracting it; `--json` for scripts |
 | Pipes | `-` for stdin/stdout | `cat data.csv \| vaqum compress - > data.vqm`, `vaqum decompress backup.vqm -o - \| tar x` |
@@ -39,7 +43,11 @@ cargo install --path .                            # from source
 ```sh
 vaqum compress <path>... [-o out] [-l 1-22] [--max] [-t threads] [-r] [--dedup] [--exclude <pattern>] [--profile <name>] [--dry-run] [-v] [-e] [--key-file <f>] [-q]
 vaqum decompress <archive.vqm|.zip|.tar.gz|-> [-o dir|-] [--only <path>]... [-v] [--verify] [--key-file <f>] [--max-ratio <n>] [--force] [-q]
-vaqum list <archive> [--json] [--key-file <f>] [-q]                 # alias: ls
+vaqum list <archive> [--json] [--key-file <f>] [-i identity] [-q]   # alias: ls
+vaqum keygen [-o identity]                                          # your personal key
+vaqum pubkey [-i identity]                                          # print your public key to share
+vaqum sign <archive> [-i identity]                                  # writes <archive>.minisig
+vaqum verify <archive> --from <pubkey>
 vaqum diff <a> <b> [--html report.html] [--open] [-e|--editor] [-v]   # files, dirs, or .vqm archives, any mix
 vaqum dedupe <dir> [--link] [--dry-run] [-t threads] [-v] [-q]        # find (and optionally hardlink) duplicate files
 vaqum shred <path> [-r] [-p passes] [-y] [--dry-run] [-q]
@@ -67,6 +75,36 @@ Archives use the `.vqm` extension. Archives from older versions named `.vaqum` s
 `decompress --only <path>` extracts just that file or folder (repeatable; a folder extracts everything inside it), using the paths `list` shows. Wildcards work like `.gitignore`: `--only '*.rs'` matches by name at any depth, `--only 'docs/**/*.md'` matches the path (`*` stays within one folder, `**` spans any number), and `--only '*.{jpg,png}'` matches either. It fails if nothing matches. `--verify` still checks the whole archive's checksum.
 
 `list` and `decompress` flag risky contents: programs disguised as documents (`invoice.pdf` that's really a Windows program, `photo.jpg.exe`), names that use invisible characters to fake their extension, files that run code when opened (`.vbs`, `.scr`, ...), setuid bits, links pointing outside the archive, and archives nested inside. This isn't a virus scanner, it catches the tricks used to get someone to open a file they shouldn't. Extracted files also keep the archive's "downloaded from the internet" mark (macOS quarantine, Windows Mark of the Web), so Gatekeeper and SmartScreen still check any program inside before it runs.
+
+### Large files (GB to TB)
+
+vaqum streams everything, so memory stays flat no matter how big the input is, and sizes are 64-bit throughout. Compression uses about 50 MB per core it runs on (about 500 MB on a 10-core machine; `-t 2` keeps it near 100 MB); decompression uses under 15 MB. On a 10-core laptop that's roughly 1.5 GB/s compressing and 1 GB/s decompressing for typical data.
+
+- **Disk space:** compressing needs room for the archive only; it's written in a single pass. Decompressing needs room for the output only, including `--verify` and dedup archives. (A dedup archive piped in through stdin is the exception: it's staged in a temp file first.)
+- **Speed:** zstd (the default) uses every core; `--max` (xz) is single-threaded and slow, so it's best kept for smaller files.
+- **Limits:** an encrypted archive can hold up to 256 TiB. `list` and `--only` read through the archive from the start, so they take longer on very large ones. `diff` compares files over 64 MiB by checksum rather than line by line. The browser viewer handles archives up to 1.5 GB.
+
+### Sending archives to people
+
+`vaqum keygen` creates your personal key and prints your public key, a single `vqm1…` string that's safe to share anywhere. Others use it to encrypt archives only you can open, and to check archives you signed:
+
+```sh
+vaqum keygen                                         # once; saved to ~/.config/vaqum/identity
+vaqum pubkey                                         # print your public key to send to people
+
+vaqum compress plans/ -r --to vqm1…alice --to vqm1…bob -o plans.vqm   # only Alice and Bob can open it
+vaqum compress plans/ -r --to vqm1…alice --sign -o plans.vqm          # ...and prove it came from you
+vaqum decompress plans.vqm --from vqm1…you                            # Alice: check the sender, then extract
+vaqum verify plans.vqm --from vqm1…you                                # or just check the signature
+```
+
+`--to` also accepts a file containing the key. Your own identity is used automatically to open archives sent to you (`-i` picks another). Signatures are standard minisign files (`plans.vqm.minisig`), sent alongside the archive. `decompress --from` refuses to extract anything unless the signature matches.
+
+When you compress, vaqum also checks what you're packing for things that look like secrets (`.env` files, SSH keys, `.pem` files, AWS/GitHub/Stripe/OpenAI/Anthropic tokens, and more) and warns you, without printing the secret itself. Leave them out with `--exclude`, encrypt with `-e` or `--to`, or skip the check with `--no-secret-check`.
+
+### Opening archives without installing anything
+
+Send someone a `.vqm` archive and they can open it at [marcdomain.github.io/vaqum](https://marcdomain.github.io/vaqum/): drop the file in, enter the password if there is one, and download the files. Decryption and extraction happen in their browser, so nothing is uploaded. Archives encrypted for people with `--to` need the command-line tool (see [web/README.md](web/README.md)).
 
 Use `-` for stdin/stdout to pipe data through vaqum. Status messages go to stderr so they never mix with the data:
 

@@ -36,6 +36,14 @@ pub enum Command {
     /// Search a file, directory, or subtree for a file name or file content
     /// match
     Search(SearchArgs),
+    /// Create your personal key (for archives sent to you, and for signing)
+    Keygen(KeygenArgs),
+    /// Print your public key, to share with people who send you archives
+    Pubkey(PubkeyArgs),
+    /// Sign an archive, so recipients can check who made it
+    Sign(SignArgs),
+    /// Check an archive's signature against the sender's public key
+    Verify(VerifyArgs),
     /// Print (or install) a shell completion script
     Completions(CompletionsArgs),
     /// Manage persisted defaults and profiles (~/.config/vaqum/config.toml)
@@ -97,7 +105,8 @@ pub struct CompressArgs {
     #[arg(long)]
     pub profile: Option<String>,
 
-    /// Number of threads to use (default: all cores)
+    /// Number of threads to use (default: all cores). Each uses about
+    /// 50 MB of memory at the default level, so this also caps memory
     #[arg(short, long)]
     pub threads: Option<usize>,
 
@@ -133,10 +142,26 @@ pub struct CompressArgs {
     #[arg(long)]
     pub key_file: Option<PathBuf>,
 
+    /// Encrypt for a person instead of with a password: their `vqm1…`
+    /// public key, or a file containing it (repeatable; each recipient can
+    /// open the archive with their own key)
+    #[arg(long = "to", value_name = "PUBKEY", conflicts_with_all = ["encrypt", "key_file"])]
+    pub to: Vec<String>,
+
+    /// Sign the archive with your key (writes <archive>.minisig). Uses your
+    /// default identity unless a path is given
+    #[arg(long, value_name = "IDENTITY", num_args = 0..=1, require_equals = true)]
+    pub sign: Option<Option<PathBuf>>,
+
     /// Suppress the progress bar (also auto-suppressed when not attached
     /// to a terminal, e.g. piped or redirected)
     #[arg(short, long)]
     pub quiet: bool,
+
+    /// Skip the leak check (the warning about credentials such as .env
+    /// files, private keys or API tokens in what you're compressing)
+    #[arg(long)]
+    pub no_secret_check: bool,
 }
 
 #[derive(Parser)]
@@ -169,6 +194,16 @@ pub struct DecompressArgs {
     /// password prompt
     #[arg(long)]
     pub key_file: Option<PathBuf>,
+
+    /// Your identity, for archives encrypted for you with --to (default:
+    /// the one `vaqum keygen` saved)
+    #[arg(short = 'i', long, value_name = "IDENTITY")]
+    pub identity: Option<PathBuf>,
+
+    /// Check the archive's signature against this sender's public key
+    /// before extracting anything; refuse if it doesn't match
+    #[arg(long, value_name = "PUBKEY")]
+    pub from: Option<String>,
 
     /// Abort if the archive's compression ratio exceeds n:1
     #[arg(long, default_value_t = crate::bomb::DEFAULT_MAX_RATIO)]
@@ -227,6 +262,10 @@ pub struct ListArgs {
     #[arg(long)]
     pub key_file: Option<PathBuf>,
 
+    /// Your identity, for archives encrypted for you with --to
+    #[arg(short = 'i', long, value_name = "IDENTITY")]
+    pub identity: Option<PathBuf>,
+
     /// Print the listing as JSON
     #[arg(long)]
     pub json: bool,
@@ -234,6 +273,44 @@ pub struct ListArgs {
     /// Suppress the progress bar
     #[arg(short, long)]
     pub quiet: bool,
+}
+
+#[derive(Parser)]
+pub struct KeygenArgs {
+    /// Where to save the identity (default: ~/.config/vaqum/identity)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct PubkeyArgs {
+    /// Identity to show the public key of (default: your saved one)
+    #[arg(short = 'i', long)]
+    pub identity: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct SignArgs {
+    /// Archive (or any file) to sign
+    pub path: PathBuf,
+
+    /// Identity to sign with (default: your saved one)
+    #[arg(short = 'i', long)]
+    pub identity: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct VerifyArgs {
+    /// Archive (or any file) to check
+    pub path: PathBuf,
+
+    /// The sender's `vqm1…` public key, or a file containing it
+    #[arg(long, value_name = "PUBKEY")]
+    pub from: String,
+
+    /// Signature file (default: <path>.minisig)
+    #[arg(long)]
+    pub signature: Option<PathBuf>,
 }
 
 #[derive(Parser)]

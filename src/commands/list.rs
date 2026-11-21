@@ -39,7 +39,14 @@ pub fn run(args: ListArgs) -> Result<()> {
         let src = archive::open_vaqum(path)?;
         let header = src.header;
         let bar = progress::bar(header.original_size, args.quiet || args.json, "Reading");
-        let payload = archive::decoded_payload(src.reader, &header, args.key_file.as_deref())?;
+        let payload = archive::decoded_payload(
+            src.reader,
+            &header,
+            archive::KeyOptions {
+                key_file: args.key_file.as_deref(),
+                identity: args.identity.as_deref(),
+            },
+        )?;
         let entries = archive::list_vaqum(ProgressReader::new(payload, bar.clone()), &header)?;
         bar.finish_and_clear();
         let kind = match header.entry_type {

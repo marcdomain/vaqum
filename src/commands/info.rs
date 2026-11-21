@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use crate::cli::InfoArgs;
 use crate::foreign::{self, ForeignFormat};
 use crate::format::{self, EntryType, read_header_and_total_size};
-use crate::util::{format_time, hash_file, hex_encode, human_bytes};
+use crate::util::{format_time, hex_encode, human_bytes};
 
 pub fn run(args: InfoArgs) -> Result<()> {
     let path = &args.path;
@@ -86,8 +86,11 @@ fn show_foreign_info(path: &Path, fmt: ForeignFormat) -> Result<()> {
 }
 
 fn show_file_info(path: &Path) -> Result<()> {
-    let (size, checksum) =
-        hash_file(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let total = path.metadata().map(|m| m.len()).unwrap_or(0);
+    let bar = crate::progress::bar(total, false, "Hashing");
+    let result = crate::util::hash_file_with_progress(path, &bar);
+    bar.finish_and_clear();
+    let (size, checksum) = result.with_context(|| format!("failed to read {}", path.display()))?;
 
     println!("{}", path.display());
     println!("  type:         file");

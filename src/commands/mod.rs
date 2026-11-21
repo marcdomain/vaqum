@@ -5,6 +5,7 @@ pub mod decompress;
 pub mod dedupe;
 pub mod diff;
 pub mod info;
+pub mod keys;
 pub mod list;
 pub mod search;
 pub mod shred;

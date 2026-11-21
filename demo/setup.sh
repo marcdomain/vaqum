@@ -70,10 +70,21 @@ printf 'one-of-a-kind photo\n' > photos/sunset.jpg
 printf 'Meeting notes\nDiscuss roadmap\nShip v1.0\n' > notes-v1.txt
 printf 'Meeting notes\nDiscuss roadmap\nShip v1.1\nFix Windows CI\n' > notes-v2.txt
 
-# search
-mkdir -p app/TODO-cleanup
+# search, and the leak check (token text built at runtime, so it never
+# appears verbatim in the repository)
+mkdir -p app/TODO-cleanup app/config
+printf 'DATABASE_URL=postgres://app:hunter2@db.internal/prod\n' > app/.env
+printf 'AWS_ACCESS_KEY_ID = "%s"\n' "AKIA$(printf 'X%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)" > app/config/settings.py
 printf 'fn main() {\n    // TODO: wire up config\n}\n' > app/main.rs
 printf '// TODO: add tests\npub fn helper() {}\n' > app/util.rs
+
+# encrypt for a person: Bob's key, and something to send him
+{
+  echo "Q4 launch plan"
+  for i in $(seq 1 60); do echo "- milestone $i: owner, budget and review date for workstream $i"; done
+} > plans.txt
+"$BIN_DIR/vaqum" keygen -o bob.key >/dev/null
+echo "export BOB=\"$("$BIN_DIR/vaqum" pubkey -i bob.key)\"" >> "$ZDOTDIR_DEMO/.zshrc"
 
 # zip / tar.gz
 mkdir -p archive-src/photos

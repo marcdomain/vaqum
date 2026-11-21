@@ -7,7 +7,8 @@
 #   ./scripts/container-test.sh npm        # npm install on several Node versions
 #
 # Needs Docker (Docker Desktop, colima, Rancher Desktop, ...). On an ARM Mac,
-# x86_64 runs under emulation, which is slower but works.
+# x86_64 runs under emulation, which is slow and can crash the C compiler;
+# ARCHES=arm64 limits the run to native containers.
 #
 # Stages:
 #   build  Runs `cargo test` on Debian (glibc) and Alpine (musl) for arm64 and
@@ -21,6 +22,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/target/container-test"
 STAGE="${1:-all}"
+read -r -a ARCH_LIST <<< "${ARCHES:-arm64 amd64}"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -n 1)"
 mkdir -p "$OUT"
 
@@ -45,7 +47,7 @@ COPY_SRC='mkdir -p /work && tar -C /src --exclude=./target --exclude=./fuzz/targ
 
 stage_build() {
   echo "==> build: test suite and static binaries"
-  for arch in arm64 amd64; do
+  for arch in "${ARCH_LIST[@]}"; do
     run "cargo test, Debian glibc, $arch" --platform "linux/$arch" \
       -v "$ROOT:/src:ro" -v "vaqum-cargo-$arch:/usr/local/cargo/registry" \
       rust:1-bookworm sh -c "$COPY_SRC && cargo test --locked"
@@ -63,7 +65,7 @@ stage_smoke() {
   echo "==> smoke: static binaries on many distros"
   local images_arm64=(alpine:3.20 busybox:1.36-musl debian:bookworm-slim ubuntu:20.04 ubuntu:24.04 fedora:41 amazonlinux:2)
   local images_amd64=(alpine:3.20 ubuntu:18.04 debian:bookworm-slim centos:7 fedora:41)
-  for arch in arm64 amd64; do
+  for arch in "${ARCH_LIST[@]}"; do
     local bin="$OUT/vaqum-linux-$arch-musl"
     if [ ! -x "$bin" ]; then
       echo "   (skipping $arch: run the build stage first)"

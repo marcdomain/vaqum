@@ -3194,3 +3194,1011 @@ fn archives_without_a_mark_extract_unmarked() {
             .is_none()
     );
 }
+
+// ---------------------------------------------------------------------
+// leak check
+// ---------------------------------------------------------------------
+
+/// A tree holding things that look like secrets. Token strings are built
+/// at runtime so they never appear verbatim in the repository.
+fn leaky_tree(root: &std::path::Path) {
+    fs::create_dir_all(root.join("config")).unwrap();
+    fs::write(root.join("README.md"), "# app").unwrap();
+    fs::write(root.join(".env"), "DATABASE_URL=postgres://x\n").unwrap();
+    fs::write(root.join(".env.example"), "DATABASE_URL=\n").unwrap();
+    fs::write(root.join("config/id_ed25519"), "key material").unwrap();
+    let aws = format!("AKIA{}", "Z".repeat(16));
+    fs::write(root.join("config/settings.py"), format!("AWS = '{aws}'\n")).unwrap();
+    let pem = format!("-----BEGIN {} KEY-----\nabc\n", "PRIVATE");
+    fs::write(root.join("config/server.txt"), pem).unwrap();
+}
+
+#[test]
+fn compress_warns_about_secrets_without_printing_them() {
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("app");
+    leaky_tree(&src);
+    let output = vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "-o",
+            dir.path().join("a.vqm").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Possible secrets in 4 files"), "{stderr}");
+    assert!(
+        stderr.contains("app/.env — looks like an environment file"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("app/config/id_ed25519 — looks like an SSH private key"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("app/config/settings.py — contains what looks like an AWS access key"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("app/config/server.txt — contains what looks like a private key"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Not encrypted"), "{stderr}");
+    assert!(
+        !stderr.contains(".env.example"),
+        "templates must not be flagged: {stderr}"
+    );
+    assert!(
+        !stderr.contains("ZZZZ"),
+        "the secret value itself must never be printed: {stderr}"
+    );
+}
+
+#[test]
+fn leak_check_respects_exclude_and_can_be_skipped() {
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("app");
+    leaky_tree(&src);
+    let out = dir.path().join("a.vqm");
+    let excluded = vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "-o",
+            out.to_str().unwrap(),
+            "--exclude",
+            ".env",
+            "--exclude",
+            "config/",
+        ])
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&excluded.stderr).contains("Possible secrets"));
+    let skipped = vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "-o",
+            out.to_str().unwrap(),
+            "--no-secret-check",
+        ])
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&skipped.stderr).contains("Possible secrets"));
+}
+
+#[test]
+fn leak_check_notes_when_the_archive_is_encrypted() {
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("app");
+    leaky_tree(&src);
+    let key = dir.path().join("k");
+    fs::write(&key, "k").unwrap();
+    vaqum()
+        .args([
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "--key-file",
+            key.to_str().unwrap(),
+            "-o",
+            dir.path().join("a.vqm").to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("The archive is encrypted"));
+}
+
+// ---------------------------------------------------------------------
+// personal keys: encrypt for recipients, sign, verify
+// ---------------------------------------------------------------------
+
+struct Person {
+    identity: std::path::PathBuf,
+    public: String,
+}
+
+fn person(dir: &std::path::Path, name: &str) -> Person {
+    let identity = dir.join(format!("{name}.key"));
+    vaqum()
+        .args(["keygen", "-o", identity.to_str().unwrap()])
+        .assert()
+        .success();
+    let out = vaqum()
+        .args(["pubkey", "-i", identity.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let public = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert!(public.starts_with("vqm1"), "{public}");
+    Person { identity, public }
+}
+
+fn sample_input(dir: &std::path::Path) -> std::path::PathBuf {
+    let input = dir.join("plans.txt");
+    write_sample_text(&input, 300);
+    input
+}
+
+#[test]
+fn keygen_creates_a_private_identity_and_refuses_to_overwrite() {
+    let dir = TempDir::new().unwrap();
+    let alice = person(dir.path(), "alice");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&alice.identity).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "identity must be readable only by its owner"
+        );
+    }
+    let before = fs::read(&alice.identity).unwrap();
+    vaqum()
+        .args(["keygen", "-o", alice.identity.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("refusing to overwrite"));
+    assert_eq!(fs::read(&alice.identity).unwrap(), before);
+}
+
+#[test]
+fn keygen_defaults_to_the_config_dir_and_is_used_automatically() {
+    let dir = TempDir::new().unwrap();
+    let cfg = dir.path().join("cfg");
+    let with_cfg = || {
+        let mut c = vaqum();
+        c.env("XDG_CONFIG_HOME", &cfg).env("APPDATA", &cfg);
+        c
+    };
+    with_cfg().arg("keygen").assert().success();
+    let me = String::from_utf8(with_cfg().arg("pubkey").output().unwrap().stdout).unwrap();
+    let input = sample_input(dir.path());
+    let archive = dir.path().join("p.vqm");
+    with_cfg()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "--to",
+            me.trim(),
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    with_cfg()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--verify",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read(&input).unwrap(),
+        fs::read(out.join("plans.txt")).unwrap()
+    );
+}
+
+#[test]
+fn archive_encrypted_for_several_people_opens_for_each_and_nobody_else() {
+    let dir = TempDir::new().unwrap();
+    let (alice, bob, eve) = (
+        person(dir.path(), "alice"),
+        person(dir.path(), "bob"),
+        person(dir.path(), "eve"),
+    );
+    let pubfile = dir.path().join("bob.pub");
+    fs::write(&pubfile, format!("# bob\n{}\n", bob.public)).unwrap();
+    let input = sample_input(dir.path());
+    let archive = dir.path().join("p.vqm");
+    vaqum()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "--to",
+            &alice.public,
+            "--to",
+            pubfile.to_str().unwrap(),
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("for 2 recipients"));
+    for who in [&alice, &bob] {
+        let out = dir.path().join(format!(
+            "out-{}",
+            who.identity.file_stem().unwrap().to_string_lossy()
+        ));
+        fs::create_dir_all(&out).unwrap();
+        vaqum()
+            .args([
+                "decompress",
+                archive.to_str().unwrap(),
+                "-i",
+                who.identity.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+                "--verify",
+            ])
+            .assert()
+            .success();
+        assert_eq!(
+            fs::read(&input).unwrap(),
+            fs::read(out.join("plans.txt")).unwrap()
+        );
+    }
+    vaqum()
+        .args([
+            "list",
+            archive.to_str().unwrap(),
+            "-i",
+            eve.identity.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "wasn't encrypted for your key (2 recipients)",
+        ));
+}
+
+#[test]
+fn recipient_archive_rejects_header_tampering() {
+    let dir = TempDir::new().unwrap();
+    let bob = person(dir.path(), "bob");
+    let input = sample_input(dir.path());
+    let archive = dir.path().join("p.vqm");
+    vaqum()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "--to",
+            &bob.public,
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let original = fs::read(&archive).unwrap();
+    assert_eq!(original[4], 3, "recipient archives use format version 3");
+    // Byte 8 starts the original-size field; byte 76 is inside the name.
+    for (offset, what) in [(8usize, "size"), (75, "name")] {
+        let mut bytes = original.clone();
+        bytes[offset] ^= 0x01;
+        fs::write(&archive, &bytes).unwrap();
+        let out = vaqum()
+            .args([
+                "list",
+                archive.to_str().unwrap(),
+                "-i",
+                bob.identity.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "tampered {what} was accepted");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("tampered") || stderr.contains("plain file name"),
+            "{what}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn public_key_typos_are_caught() {
+    let dir = TempDir::new().unwrap();
+    let bob = person(dir.path(), "bob");
+    let mut typo: Vec<char> = bob.public.chars().collect();
+    let i = typo.len() / 2;
+    typo[i] = if typo[i] == 'A' { 'B' } else { 'A' };
+    let typo: String = typo.into_iter().collect();
+    vaqum()
+        .args([
+            "compress",
+            sample_input(dir.path()).to_str().unwrap(),
+            "--to",
+            &typo,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("typo").or(predicate::str::contains("damaged")));
+}
+
+#[test]
+fn signed_archive_verifies_and_tampering_or_wrong_signer_is_caught() {
+    let dir = TempDir::new().unwrap();
+    let (alice, mallory) = (person(dir.path(), "alice"), person(dir.path(), "mallory"));
+    let input = sample_input(dir.path());
+    let archive = dir.path().join("p.vqm");
+    vaqum()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            &format!("--sign={}", alice.identity.display()),
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("signature:"));
+    assert!(dir.path().join("p.vqm.minisig").exists());
+
+    vaqum()
+        .args(["verify", archive.to_str().unwrap(), "--from", &alice.public])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Good signature"));
+    vaqum()
+        .args([
+            "verify",
+            archive.to_str().unwrap(),
+            "--from",
+            &mallory.public,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("signature check FAILED"));
+
+    let mut bytes = fs::read(&archive).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
+    fs::write(&archive, bytes).unwrap();
+    vaqum()
+        .args(["verify", archive.to_str().unwrap(), "--from", &alice.public])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("signature check FAILED"));
+}
+
+#[test]
+fn decompress_from_refuses_unsigned_or_wrongly_signed_archives_before_extracting() {
+    let dir = TempDir::new().unwrap();
+    let (alice, mallory) = (person(dir.path(), "alice"), person(dir.path(), "mallory"));
+    let archive = sample_archive(dir.path(), &[]);
+    let out = dir.path().join("out");
+    // No signature at all.
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "--from",
+            &alice.public,
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no readable signature"));
+    assert!(
+        !out.exists(),
+        "nothing may be extracted before the signature checks out"
+    );
+    // Signed by someone else.
+    vaqum()
+        .args([
+            "sign",
+            archive.to_str().unwrap(),
+            "-i",
+            mallory.identity.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "--from",
+            &alice.public,
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(!out.exists());
+    // Signed by the expected sender.
+    vaqum()
+        .args([
+            "sign",
+            archive.to_str().unwrap(),
+            "-i",
+            alice.identity.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "--from",
+            &alice.public,
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Signature verified"));
+    assert!(out.join("src_tree/a.txt").exists());
+}
+
+#[test]
+fn recipients_and_password_options_cannot_be_mixed() {
+    let dir = TempDir::new().unwrap();
+    let bob = person(dir.path(), "bob");
+    vaqum()
+        .args([
+            "compress",
+            sample_input(dir.path()).to_str().unwrap(),
+            "--to",
+            &bob.public,
+            "-e",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+// ---------------------------------------------------------------------
+// large inputs: streaming paths
+// ---------------------------------------------------------------------
+
+#[test]
+fn dedup_archive_extracts_from_stdin_too() {
+    // Files go through the two-pass path; stdin can't be re-read, so it
+    // takes the staging fallback. Both must produce the same tree.
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &["--dedup"]);
+    let out = dir.path().join("out");
+    vaqum()
+        .args(["decompress", "-", "-o", out.to_str().unwrap(), "--verify"])
+        .write_stdin(fs::read(&archive).unwrap())
+        .assert()
+        .success();
+    assert_trees_equal(&dir.path().join("src_tree"), &out.join("src_tree"));
+}
+
+#[test]
+fn dedup_archive_missing_a_content_object_is_reported() {
+    let dir = TempDir::new().unwrap();
+    // Manifest points at a well-formed hash the archive doesn't contain.
+    let tar = dedup_tar_with("ok.txt", &"b".repeat(64), b"data");
+    let archive = dir.path().join("broken.vqm");
+    write_raw_archive(&archive, 1, 1, tar.len() as u64, "victim", &tar);
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            dir.path().join("out").to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("missing"));
+}
+
+#[test]
+fn verify_catches_a_checksum_mismatch_while_streaming() {
+    let dir = TempDir::new().unwrap();
+    let archive = sample_archive(dir.path(), &[]);
+    let mut bytes = fs::read(&archive).unwrap();
+    bytes[16] ^= 0xFF; // first byte of the stored SHA-256
+    fs::write(&archive, bytes).unwrap();
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            dir.path().join("out").to_str().unwrap(),
+            "--verify",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("checksum verification FAILED"))
+        .stderr(predicate::str::contains("treat them as damaged"));
+}
+
+#[test]
+fn search_streams_files_and_skips_pathological_lines() {
+    let dir = TempDir::new().unwrap();
+    let mut normal = fs::File::create(dir.path().join("log.txt")).unwrap();
+    for i in 0..50_000 {
+        writeln!(
+            normal,
+            "line {i} {}",
+            if i == 31_337 {
+                "NEEDLE here"
+            } else {
+                "nothing"
+            }
+        )
+        .unwrap();
+    }
+    // A single 17 MiB line: treated as not-really-text instead of loaded.
+    let mut blob = vec![b'x'; 17 * 1024 * 1024];
+    blob.extend_from_slice(b"NEEDLE\n");
+    fs::write(dir.path().join("minified.js"), blob).unwrap();
+    vaqum()
+        .args([
+            "search",
+            "NEEDLE",
+            dir.path().to_str().unwrap(),
+            "--content-only",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "log.txt:31338: line 31337 NEEDLE here",
+        ))
+        .stdout(predicate::str::contains("minified.js").not());
+}
+
+/// A file just over diff's line-by-line limit (64 MiB).
+fn write_large(path: &std::path::Path, tail: &[u8]) {
+    let mut f = fs::File::create(path).unwrap();
+    let chunk = vec![b'a'; 1024 * 1024];
+    for _ in 0..65 {
+        f.write_all(&chunk).unwrap();
+    }
+    f.write_all(tail).unwrap();
+}
+
+#[test]
+fn diff_compares_huge_files_by_checksum_without_loading_them() {
+    let dir = TempDir::new().unwrap();
+    let (a, b, c) = (
+        dir.path().join("a.bin"),
+        dir.path().join("b.bin"),
+        dir.path().join("c.bin"),
+    );
+    write_large(&a, b"one");
+    write_large(&b, b"one");
+    write_large(&c, b"two");
+    vaqum()
+        .args(["diff", a.to_str().unwrap(), b.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("are identical"));
+    vaqum()
+        .args(["diff", a.to_str().unwrap(), c.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "too large for a line-by-line diff",
+        ));
+}
+
+#[test]
+fn diff_of_folders_reports_huge_modified_files_without_reading_them() {
+    let dir = TempDir::new().unwrap();
+    let (x, y) = (dir.path().join("x"), dir.path().join("y"));
+    fs::create_dir_all(&x).unwrap();
+    fs::create_dir_all(&y).unwrap();
+    write_large(&x.join("big.log"), b"old");
+    write_large(&y.join("big.log"), b"new");
+    vaqum()
+        .args(["diff", x.to_str().unwrap(), y.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "big.log  (too large for a line diff",
+        ));
+}
+
+// ---------------------------------------------------------------------
+// robustness
+// ---------------------------------------------------------------------
+
+#[test]
+fn archive_saved_inside_the_folder_never_includes_itself() {
+    for extra in [&[][..], &["--dedup"][..]] {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("proj");
+        build_sample_tree(&src);
+        let out = src.join("proj.vqm");
+        fs::write(&out, "an older archive being replaced").unwrap();
+        let mut args = vec![
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "-o",
+            out.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        vaqum().args(&args).assert().success();
+
+        let listing = list_json(&out, &[]);
+        let paths = listed_paths(&listing);
+        assert!(
+            !paths
+                .iter()
+                .any(|p| p.ends_with(".vqm") || p.contains(".tmp")),
+            "{extra:?}: {paths:?}"
+        );
+        let mut names: Vec<String> = fs::read_dir(&src)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            ["a.txt", "b.txt", "nested", "proj.vqm"],
+            "{extra:?}: no temp files may remain"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn dedupe_link_is_idempotent() {
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("photos");
+    build_sample_tree(&src);
+    vaqum()
+        .args(["dedupe", src.to_str().unwrap(), "--link"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Hardlinked 1 duplicate"));
+    // Already linked: nothing to do, nothing counted as reclaimed again.
+    vaqum()
+        .args(["dedupe", src.to_str().unwrap(), "--link"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Hardlinked 0 duplicate"));
+    assert_eq!(
+        fs::read(src.join("a.txt")).unwrap(),
+        fs::read(src.join("b.txt")).unwrap()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupting_compress_leaves_no_temp_files() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("big.bin");
+    // xz at maximum is slow enough to interrupt reliably.
+    let f = fs::File::create(&input).unwrap();
+    f.set_len(400 * 1024 * 1024).unwrap();
+    let bin = assert_cmd::cargo::cargo_bin("vaqum");
+    let child = std::process::Command::new(bin)
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "--max",
+            "-q",
+            "--no-secret-check",
+        ])
+        .env("XDG_CONFIG_HOME", isolated_config_home())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    std::process::Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(130),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let names: Vec<String> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["big.bin"], "temp files left behind: {names:?}");
+}
+
+// ---------------------------------------------------------------------
+// integrity: byte-for-byte round trips over tricky inputs, every mode
+// ---------------------------------------------------------------------
+
+/// Deterministic pseudo-random bytes (incompressible), no extra deps.
+fn noise(len: usize, seed: u64) -> Vec<u8> {
+    let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    (0..len)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x >> 24) as u8
+        })
+        .collect()
+}
+
+/// A tree of edge cases: empty and 1-byte files, sizes straddling the
+/// 64 KiB encryption chunk, every byte value, Unicode and spaces in
+/// names, deep nesting, an empty directory, duplicates.
+fn tricky_tree(root: &std::path::Path) {
+    fs::create_dir_all(root.join("empty-dir")).unwrap();
+    fs::write(root.join("empty.txt"), b"").unwrap();
+    fs::write(root.join("one.bin"), b"\x00").unwrap();
+    for (i, size) in [65_535usize, 65_536, 65_537, 131_072, 1_000_003]
+        .iter()
+        .enumerate()
+    {
+        fs::write(
+            root.join(format!("noise-{size}.bin")),
+            noise(*size, i as u64 + 1),
+        )
+        .unwrap();
+    }
+    fs::write(
+        root.join("all-bytes.bin"),
+        (0..=255u8).cycle().take(70_000).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    fs::write(root.join("résumé – 日本語 🎉.txt"), "unicode name\n").unwrap();
+    fs::write(root.join("with spaces.txt"), "spaces\n").unwrap();
+    let mut deep = root.to_path_buf();
+    for level in 0..20 {
+        deep = deep.join(format!("d{level}"));
+    }
+    fs::create_dir_all(&deep).unwrap();
+    fs::write(deep.join("bottom.txt"), "deep\n").unwrap();
+    let text: String = (0..80_000)
+        .map(|i| format!("log {i} status=200\n"))
+        .collect();
+    fs::write(root.join("big.log"), &text).unwrap();
+    fs::write(root.join("big-copy.log"), &text).unwrap();
+}
+
+/// Every directory (including empty ones) under `root`, relative.
+fn all_dirs(root: &std::path::Path) -> Vec<String> {
+    let mut dirs: Vec<String> = walkdir::WalkDir::new(root)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_dir())
+        .map(|e| {
+            e.path()
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+#[test]
+fn every_mode_round_trips_tricky_inputs_byte_for_byte() {
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("tricky");
+    tricky_tree(&src);
+    let key = dir.path().join("key");
+    fs::write(&key, "integrity key").unwrap();
+    let identity = dir.path().join("me.key");
+    vaqum()
+        .args(["keygen", "-o", identity.to_str().unwrap()])
+        .assert()
+        .success();
+    let me = String::from_utf8(
+        vaqum()
+            .args(["pubkey", "-i", identity.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let me = me.trim();
+
+    let modes: Vec<(&str, Vec<&str>, Vec<&str>)> = vec![
+        ("plain", vec![], vec![]),
+        ("xz", vec!["--max"], vec![]),
+        ("dedup", vec!["--dedup"], vec![]),
+        ("level 1", vec!["-l", "1"], vec![]),
+        ("level 19", vec!["-l", "19"], vec![]),
+        (
+            "password",
+            vec!["--key-file", key.to_str().unwrap()],
+            vec!["--key-file", key.to_str().unwrap()],
+        ),
+        (
+            "dedup + password",
+            vec!["--dedup", "--key-file", key.to_str().unwrap()],
+            vec!["--key-file", key.to_str().unwrap()],
+        ),
+        (
+            "recipient",
+            vec!["--to", me],
+            vec!["-i", identity.to_str().unwrap()],
+        ),
+        (
+            "xz + recipient",
+            vec!["--max", "--to", me],
+            vec!["-i", identity.to_str().unwrap()],
+        ),
+    ];
+    for (i, (label, compress_flags, open_flags)) in modes.iter().enumerate() {
+        let archive = dir.path().join(format!("m{i}.vqm"));
+        let mut args = vec![
+            "compress",
+            src.to_str().unwrap(),
+            "-r",
+            "-q",
+            "--no-secret-check",
+            "-o",
+            archive.to_str().unwrap(),
+        ];
+        args.extend(compress_flags);
+        vaqum().args(&args).assert().success();
+        let out = dir.path().join(format!("out{i}"));
+        let mut args = vec![
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--verify",
+            "-q",
+        ];
+        args.extend(open_flags);
+        vaqum().args(&args).assert().success();
+        assert_trees_equal(&src, &out.join("tricky"));
+        assert_eq!(
+            all_dirs(&src),
+            all_dirs(&out.join("tricky")),
+            "{label}: directories (incl. empty) must survive"
+        );
+        // --only through the same archive.
+        let only = dir.path().join(format!("only{i}"));
+        let mut args = vec![
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            only.to_str().unwrap(),
+            "--only",
+            "*.bin",
+            "-q",
+        ];
+        args.extend(open_flags);
+        vaqum().args(&args).assert().success();
+        let mut got = walk_relative(&only.join("tricky"));
+        got.sort();
+        let mut want: Vec<String> = walk_relative(&src)
+            .into_iter()
+            .filter(|p| p.ends_with(".bin"))
+            .collect();
+        want.sort();
+        assert_eq!(got, want, "{label}: --only *.bin");
+        for rel in &want {
+            assert_eq!(
+                fs::read(src.join(rel)).unwrap(),
+                fs::read(only.join("tricky").join(rel)).unwrap(),
+                "{label}: {rel}"
+            );
+        }
+    }
+}
+
+#[test]
+fn single_file_archives_round_trip_edge_sizes_including_empty() {
+    let dir = TempDir::new().unwrap();
+    let key = dir.path().join("key");
+    fs::write(&key, "k").unwrap();
+    for (i, data) in [
+        vec![],
+        vec![7u8],
+        noise(65_536, 9),
+        noise(65_537, 10),
+        noise(200_000, 11),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let input = dir.path().join(format!("f{i}.bin"));
+        fs::write(&input, data).unwrap();
+        for extra in [
+            &[][..],
+            &["--max"][..],
+            &["--key-file", key.to_str().unwrap()][..],
+        ] {
+            let archive = dir.path().join(format!("f{i}-{}.vqm", extra.len()));
+            let mut args = vec![
+                "compress",
+                input.to_str().unwrap(),
+                "-q",
+                "-o",
+                archive.to_str().unwrap(),
+            ];
+            args.extend_from_slice(extra);
+            vaqum().args(&args).assert().success();
+            let opened = vaqum()
+                .args([
+                    "decompress",
+                    archive.to_str().unwrap(),
+                    "-o",
+                    "-",
+                    "--verify",
+                ])
+                .args(if extra.contains(&"--key-file") {
+                    vec!["--key-file", key.to_str().unwrap()]
+                } else {
+                    vec![]
+                })
+                .output()
+                .unwrap();
+            assert!(
+                opened.status.success(),
+                "{i} {extra:?}: {}",
+                String::from_utf8_lossy(&opened.stderr)
+            );
+            assert_eq!(&opened.stdout, data, "{i} {extra:?}: bytes differ");
+        }
+    }
+}
+
+#[test]
+fn every_corrupted_byte_in_a_plain_archive_is_detected_or_harmless() {
+    // Flip each byte of a small archive in turn: --verify must either
+    // fail or produce the exact original. Never silently wrong output.
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("data.txt");
+    write_sample_text(&input, 40);
+    let archive = dir.path().join("data.vqm");
+    vaqum()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "-q",
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let original = fs::read(&archive).unwrap();
+    let expected = fs::read(&input).unwrap();
+    for pos in 0..original.len() {
+        let mut bytes = original.clone();
+        bytes[pos] ^= 0x5A;
+        fs::write(&archive, &bytes).unwrap();
+        let out = vaqum()
+            .args([
+                "decompress",
+                archive.to_str().unwrap(),
+                "-o",
+                "-",
+                "--verify",
+            ])
+            .output()
+            .unwrap();
+        if out.status.success() {
+            assert_eq!(
+                out.stdout, expected,
+                "byte {pos}: corruption produced wrong output that passed --verify"
+            );
+        }
+    }
+}

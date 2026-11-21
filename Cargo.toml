@@ -15,11 +15,16 @@ argon2 = "0.6.0"
 chacha20poly1305 = { version = "0.10.1", features = ["stream"] }
 clap = { version = "4.6.6", features = ["derive"] }
 clap_complete = "4.6.9"
+ct-codecs = "1.1.8"
+ctrlc = "3.5.3"
 flate2 = "1.1.10"
 fs2 = "0.4.3"
 globset = "0.4.20"
+hkdf = "0.13.0"
+hmac = "0.13.0"
 humansize = "2.1.3"
 indicatif = "0.18.6"
+minisign = "0.10.0"
 rand = "0.10.2"
 rayon = "1.12.0"
 regex = "1.13.1"
@@ -33,6 +38,7 @@ tempfile = "3.27.0"
 time = { version = "0.3.55", features = ["formatting"] }
 toml = "1.1.4"
 walkdir = "2.5.0"
+x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 xz2 = { version = "0.1.7", features = ["static"] }
 zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
 zstd = { version = "0.14.4", features = ["zstdmt"] }
@@ -60,6 +66,4 @@ xattr = "1.7.0"
 # Key derivation is deliberately expensive; optimize it even in debug
 # builds so `cargo test` (which encrypts archives) stays fast.
 [profile.dev.package.argon2]
-opt-level = 3
-[profile.dev.package.blake2]
 opt-level = 3

@@ -16,6 +16,10 @@
 //!                          not encrypted)
 //! name_len       2 bytes   length in bytes of `name`
 //! name           N bytes   UTF-8 original file/directory name
+//! -- version 3 only (encrypted for recipients, `compress --to`):
+//! recipients     1 byte    number of recipients (1-255)
+//! stanzas        80 bytes  per recipient: ephemeral X25519 key + wrapped file key
+//! mac            32 bytes  HMAC-SHA256 over every header byte before it
 //! ---
 //! payload, to end of file (compressed, then encrypted if flagged)
 //! ```
@@ -30,6 +34,8 @@ use anyhow::{Context, Result, bail};
 
 pub const MAGIC: &[u8; 4] = b"VAQM";
 pub const VERSION: u8 = 2;
+/// Archives encrypted for recipients (see `keys.rs`).
+pub const VERSION_RECIPIENTS: u8 = 3;
 
 pub const FLAG_DEDUP: u8 = 0b0000_0001;
 pub const FLAG_ENCRYPTED: u8 = 0b0000_0010;
@@ -113,12 +119,32 @@ pub struct Header {
     pub salt: [u8; SALT_LEN],
     pub nonce_prefix: [u8; NONCE_PREFIX_LEN],
     pub name: String,
+    /// Wrapped file keys, one per recipient (version 3 archives only).
+    pub recipients: Vec<crate::keys::Stanza>,
+    /// Header MAC (version 3 archives only).
+    pub mac: [u8; crate::keys::MAC_LEN],
 }
 
 impl Header {
     pub fn write<W: Write>(&self, mut w: W) -> Result<()> {
+        w.write_all(&self.bytes_without_mac()?)?;
+        if !self.recipients.is_empty() {
+            w.write_all(&self.mac)?;
+        }
+        Ok(())
+    }
+
+    /// Every header byte except the trailing MAC (what the MAC covers).
+    pub fn bytes_without_mac(&self) -> Result<Vec<u8>> {
+        let mut w =
+            Vec::with_capacity(FIXED_LEN + self.name.len() + 1 + self.recipients.len() * 80);
+        let version = if self.recipients.is_empty() {
+            VERSION
+        } else {
+            VERSION_RECIPIENTS
+        };
         w.write_all(MAGIC)?;
-        w.write_all(&[VERSION])?;
+        w.write_all(&[version])?;
         w.write_all(&[self.entry_type.to_byte()])?;
         w.write_all(&[self.algorithm.to_byte()])?;
         let mut flags = if self.dedup { FLAG_DEDUP } else { 0 };
@@ -139,7 +165,16 @@ impl Header {
         }
         w.write_all(&(name_bytes.len() as u16).to_le_bytes())?;
         w.write_all(name_bytes)?;
-        Ok(())
+        if !self.recipients.is_empty() {
+            if self.recipients.len() > u8::MAX as usize {
+                bail!("an archive can have at most 255 recipients");
+            }
+            w.write_all(&[self.recipients.len() as u8])?;
+            for stanza in &self.recipients {
+                w.write_all(stanza)?;
+            }
+        }
+        Ok(w)
     }
 
     pub fn read<R: Read>(mut r: R) -> Result<Self> {
@@ -151,7 +186,7 @@ impl Header {
             bail!("not a vaqum file (bad magic bytes)");
         }
         let version = fixed[4];
-        if version != VERSION {
+        if version != VERSION && version != VERSION_RECIPIENTS {
             bail!(
                 "unsupported vaqum format version {version} (this build supports version {VERSION}); re-compress the file with this version of vaqum"
             );
@@ -191,7 +226,31 @@ impl Header {
             );
         }
 
+        let mut recipients = Vec::new();
+        let mut mac = [0u8; crate::keys::MAC_LEN];
+        if version == VERSION_RECIPIENTS {
+            if !encrypted {
+                bail!("corrupt vaqum header: recipient archive isn't marked encrypted");
+            }
+            let mut count = [0u8; 1];
+            r.read_exact(&mut count)
+                .context("failed to read the archive's recipient list")?;
+            if count[0] == 0 {
+                bail!("corrupt vaqum header: recipient archive has no recipients");
+            }
+            for _ in 0..count[0] {
+                let mut stanza = [0u8; crate::keys::STANZA_LEN];
+                r.read_exact(&mut stanza)
+                    .context("failed to read the archive's recipient list")?;
+                recipients.push(stanza);
+            }
+            r.read_exact(&mut mac)
+                .context("failed to read the archive's header MAC")?;
+        }
+
         Ok(Header {
+            recipients,
+            mac,
             entry_type,
             algorithm,
             dedup,
@@ -206,7 +265,13 @@ impl Header {
     }
 
     pub fn on_disk_len(&self) -> u64 {
-        FIXED_LEN as u64 + self.name.len() as u64
+        let recipients = if self.recipients.is_empty() {
+            0
+        } else {
+            1 + self.recipients.len() as u64 * crate::keys::STANZA_LEN as u64
+                + crate::keys::MAC_LEN as u64
+        };
+        FIXED_LEN as u64 + self.name.len() as u64 + recipients
     }
 }
 
@@ -369,6 +434,10 @@ impl<W: Write> CountingWriter<W> {
 
     pub fn count(&self) -> u64 {
         self.count
+    }
+
+    pub fn into_inner(self) -> W {
+        self.inner
     }
 }
 

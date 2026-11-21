@@ -25,6 +25,8 @@ fuzz_target!(|data: &[u8]| {
         salt: [0; 16],
         nonce_prefix: [0; 7],
         name: "root".into(),
+        recipients: Vec::new(),
+        mac: [0; 32],
     };
     if let Ok(mut selectors) = Selectors::new(&[pattern]) {
         selectors.select(&header, path);

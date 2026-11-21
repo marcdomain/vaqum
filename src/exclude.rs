@@ -16,6 +16,9 @@ pub const IGNORE_FILE: &str = ".vaqumignore";
 pub struct ExcludeSet {
     dirs: Option<GlobSet>,
     files: Option<GlobSet>,
+    /// Exact files to leave out (resolved paths), e.g. the archive being
+    /// written when it sits inside the folder being compressed.
+    skip: Vec<std::path::PathBuf>,
 }
 
 impl ExcludeSet {
@@ -52,7 +55,32 @@ impl ExcludeSet {
         Ok(Self {
             dirs: has_dirs.then(|| dir_builder.build()).transpose()?,
             files: has_files.then(|| file_builder.build()).transpose()?,
+            skip: Vec::new(),
         })
+    }
+
+    /// Also leave out these exact files.
+    pub fn skipping(mut self, paths: &[std::path::PathBuf]) -> Self {
+        self.skip = paths.to_vec();
+        self
+    }
+
+    /// Whether a walked entry under `root` is left out, by pattern or as a
+    /// skipped file. Paths are only resolved when a file name matches, so
+    /// this stays cheap on large trees.
+    pub fn excludes(&self, root: &Path, entry: &walkdir::DirEntry) -> bool {
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .expect("walked entries are under their root");
+        if self.is_excluded(&crate::util::to_posix_path(rel), entry.file_type().is_dir()) {
+            return true;
+        }
+        !entry.file_type().is_dir()
+            && self.skip.iter().any(|s| {
+                s.file_name() == Some(entry.file_name())
+                    && entry.path().canonicalize().is_ok_and(|p| &p == s)
+            })
     }
 
     pub fn is_excluded(&self, rel_posix_path: &str, is_dir: bool) -> bool {

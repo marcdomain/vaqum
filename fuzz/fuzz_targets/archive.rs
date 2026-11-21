@@ -19,11 +19,11 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    if let Ok(payload) = archive::decoded_payload(rest, &header, None) {
+    if let Ok(payload) = archive::decoded_payload(rest, &header, Default::default()) {
         let _ = archive::list_vaqum(payload, &header);
     }
 
-    let Ok(mut payload) = archive::decoded_payload(rest, &header, None) else {
+    let Ok(mut payload) = archive::decoded_payload(rest, &header, Default::default()) else {
         return;
     };
     let dir = tempfile::tempdir().unwrap();

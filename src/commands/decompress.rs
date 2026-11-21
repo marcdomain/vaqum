@@ -16,6 +16,9 @@ use crate::format::{self, EntryType, HashingReader, HashingWriter, Header};
 use crate::origin::Origin;
 use crate::progress::{self, ProgressReader};
 use crate::risk;
+/// Buffer for decompressed output writes.
+const IO_BUFFER: usize = 1024 * 1024;
+
 use crate::util::{
     AtomicFile, Out, hex_encode, human_bytes, is_stdio, set_unix_mode, to_posix_path,
 };
@@ -33,6 +36,11 @@ pub fn run(args: DecompressArgs) -> Result<()> {
                 "-o - (stdout) works with .vqm archives, not {}",
                 fmt.label()
             );
+        }
+        if let Some(from) = &args.from {
+            let signer = crate::keys::PublicKey::load(from)?;
+            crate::sign::verify_file(&args.path, None, &signer)?;
+            eprintln!("✔ Signature verified: made by the expected sender, unchanged since");
         }
         return run_foreign(args, fmt);
     }
@@ -70,6 +78,15 @@ fn run_foreign(args: DecompressArgs, fmt: ForeignFormat) -> Result<()> {
 }
 
 fn run_vaqum(args: DecompressArgs) -> Result<()> {
+    // --from: check who made the archive before reading any of it.
+    if let Some(from) = &args.from {
+        if is_stdio(&args.path) {
+            bail!("--from needs the archive as a file (its signature sits next to it)");
+        }
+        let signer = crate::keys::PublicKey::load(from)?;
+        crate::sign::verify_file(&args.path, None, &signer)?;
+        eprintln!("✔ Signature verified: made by the expected sender, unchanged since");
+    }
     let to_stdout = args.output.as_deref().is_some_and(is_stdio);
     let out = Out::new(to_stdout);
     let src = archive::open_vaqum(&args.path)?;
@@ -105,13 +122,27 @@ fn run_vaqum(args: DecompressArgs) -> Result<()> {
         bomb::check_disk_space(header.original_size, &bomb_check_dir(&header, &args)?)?;
     }
 
-    let payload = archive::decoded_payload(src.reader, &header, args.key_file.as_deref())?;
-    let bar = progress::bar(header.original_size, args.quiet, "Decompressing");
+    let key = archive::payload_key(
+        &header,
+        archive::KeyOptions {
+            key_file: args.key_file.as_deref(),
+            identity: args.identity.as_deref(),
+        },
+    )?;
+    // Dedup archives keep their file list at the end. Read from a file, they
+    // are decoded twice (verify + read the list, then extract) instead of
+    // staging gigabytes in temp files; stdin can only be read once.
+    let two_pass = header.dedup && !to_stdout && !is_stdio(&args.path);
+    let passes = if two_pass { 2 } else { 1 };
+    let bar = progress::bar(header.original_size * passes, args.quiet, "Decompressing");
+    let payload = archive::decoded_payload_with_key(src.reader, &header, key.as_ref())?;
     let decoder = ProgressReader::new(payload, bar.clone());
 
     let mut ext = Extracted::default();
     let result = (|| -> Result<()> {
-        if to_stdout {
+        if two_pass {
+            dedup_two_pass(decoder, &header, key.as_ref(), &args, &bar, &mut ext)
+        } else if to_stdout {
             write_to_stdout(decoder, &header, &args)
         } else if !args.only.is_empty() {
             extract_selected(decoder, &header, &args, &mut ext)
@@ -192,9 +223,10 @@ fn bomb_check_dir(header: &Header, args: &DecompressArgs) -> Result<PathBuf> {
 /// `-o -`: the file's bytes, or a directory archive's raw tar stream.
 fn write_to_stdout<R: Read>(decoder: R, header: &Header, args: &DecompressArgs) -> Result<()> {
     let mut reader = HashingReader::new(decoder, args.verify);
-    let mut stdout = io::stdout().lock();
+    // Rust's stdout is line-buffered; binary data wants big blocks.
+    let mut stdout = io::BufWriter::with_capacity(IO_BUFFER, io::stdout().lock());
     io::copy(&mut reader, &mut stdout).context("failed to write to stdout")?;
-    stdout.flush().ok();
+    stdout.flush().context("failed to write to stdout")?;
     if args.verify {
         let (size, checksum) = reader.stats();
         verify_checksum(header, size, checksum)?;
@@ -217,16 +249,20 @@ fn decompress_file<R: io::Read>(
     // Written to a temp file and moved into place only once complete (and
     // verified, with --verify), so a failure never leaves a partial file.
     let mut out_file = AtomicFile::create(&dest_path)?;
-    if args.verify {
-        let mut hashing = HashingWriter::new(out_file.file());
-        io::copy(&mut decoder, &mut hashing)
-            .with_context(|| format!("failed to decompress into {}", dest_path.display()))?;
-        let (_, size, checksum) = hashing.into_inner_with_stats();
-        verify_checksum(header, size, checksum)?;
-        report!("✔ verified checksum ({})", hex_encode(&checksum));
-    } else {
-        io::copy(&mut decoder, out_file.file())
-            .with_context(|| format!("failed to decompress into {}", dest_path.display()))?;
+    let failed = || format!("failed to decompress into {}", dest_path.display());
+    {
+        let mut writer =
+            HashingWriter::new(io::BufWriter::with_capacity(IO_BUFFER, out_file.file()));
+        io::copy(&mut decoder, &mut writer).with_context(failed)?;
+        let (buffered, size, checksum) = writer.into_inner_with_stats();
+        buffered
+            .into_inner()
+            .map_err(|e| e.into_error())
+            .with_context(failed)?;
+        if args.verify {
+            verify_checksum(header, size, checksum)?;
+            report!("✔ verified checksum ({})", hex_encode(&checksum));
+        }
     }
     out_file.commit()?;
     ext.add_file(&dest_path, &header.name, None);
@@ -250,22 +286,31 @@ fn decompress_tar<R: io::Read>(
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
-    // Streaming, no verify/dedup: unpack straight from the decoder.
-    if !args.verify && !header.dedup {
+    // Plain archives always stream straight to disk, checksumming on the
+    // way when asked (the whole stream passes through the hasher).
+    if !header.dedup {
+        let mut reader = HashingReader::new(&mut decoder, args.verify);
         extract::unpack_tar(
-            &mut decoder,
+            &mut reader,
             target_dir,
             &shown_prefix(header),
             &mut |_| true,
             ext,
         )?;
+        if args.verify {
+            io::copy(&mut reader, &mut io::sink()).context("failed to read archive")?;
+            let (size, checksum) = reader.stats();
+            verify_checksum(header, size, checksum).context(
+                "files were extracted before the mismatch was found; treat them as damaged",
+            )?;
+            report!("✔ verified checksum ({})", hex_encode(&checksum));
+        }
         report!("✔ Decompressed -> {}", target_dir.display());
         return Ok(());
     }
 
-    // Otherwise materialize the decompressed tar stream to a temp file
-    // first, either to checksum it, to unpack it into a dedup staging
-    // area, or both.
+    // A dedup archive read from stdin can't be decoded twice, so its tar
+    // stream is staged in a temp file and resolved from there.
     let tar_file = materialize(&mut decoder, header, args.verify, target_dir)?;
     let staging = staging_dir_for(target_dir)?;
     dedup::unpack_tar(
@@ -321,6 +366,125 @@ fn existing_parent(path: &Path) -> PathBuf {
         .and_then(|p| p.ancestors().find(|a| a.is_dir()))
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+// ------------------------------------------------------ dedup, two passes
+
+/// Extracts a dedup archive read from a file without staging it on disk.
+/// Pass 1 decodes the whole stream to verify it (with --verify) and read
+/// the manifest at its end, before anything is written. Pass 2 decodes it
+/// again and writes each needed content object straight to its first
+/// destination (duplicates are copied from there; on APFS/btrfs that's a
+/// cheap clone), stopping as soon as everything wanted is written.
+fn dedup_two_pass<R: Read>(
+    first_pass: R,
+    header: &Header,
+    key: Option<&crate::crypto::Key>,
+    args: &DecompressArgs,
+    bar: &indicatif::ProgressBar,
+    ext: &mut Extracted,
+) -> Result<()> {
+    let mut selectors = (!args.only.is_empty())
+        .then(|| Selectors::new(&args.only))
+        .transpose()?;
+    let output_base = args.output.clone().unwrap_or(env::current_dir()?);
+    let target_dir = match header.entry_type {
+        EntryType::Archive => output_base.join(&header.name),
+        _ => output_base,
+    };
+    let prefix = shown_prefix(header);
+
+    // Pass 1: verify and read the manifest.
+    let mut reader = HashingReader::new(first_pass, args.verify);
+    let manifest = read_manifest(&mut reader)?;
+    if args.verify {
+        io::copy(&mut reader, &mut io::sink()).context("failed to read archive")?;
+        let (size, checksum) = reader.stats();
+        verify_checksum(header, size, checksum)?;
+        report!("✔ verified checksum ({})", hex_encode(&checksum));
+    }
+
+    let mut select = |path: &str| selectors.as_mut().is_none_or(|s| s.select(header, path));
+    fs::create_dir_all(&target_dir)
+        .with_context(|| format!("failed to create {}", target_dir.display()))?;
+    for dir in &manifest.dirs {
+        if select(dir) {
+            let path = archive::safe_join(&target_dir, dir)?;
+            fs::create_dir_all(&path)?;
+            ext.add_dir(&path);
+        }
+    }
+    // content hash -> every file with that content
+    let mut wanted: HashMap<&str, Vec<&dedup::FileEntry>> = HashMap::new();
+    for file in &manifest.files {
+        if select(&file.path) {
+            if !archive::is_object_hash(&file.hash) {
+                bail!("corrupt dedup manifest: invalid object id {:?}", file.hash);
+            }
+            archive::safe_join(&target_dir, &file.path)?;
+            wanted.entry(file.hash.as_str()).or_default().push(file);
+        }
+    }
+
+    // Pass 2: write the needed objects.
+    if !wanted.is_empty() {
+        let src = archive::open_vaqum(&args.path)?;
+        let payload = archive::decoded_payload_with_key(src.reader, header, key)?;
+        let mut tar = tar::Archive::new(ProgressReader::new(payload, bar.clone()));
+        let mut remaining = wanted.len();
+        for entry in tar.entries().context("failed to read archive contents")? {
+            let mut entry = entry.context("failed to read an archive entry")?;
+            let rel = to_posix_path(&entry.path()?);
+            let Some(files) = rel
+                .strip_prefix(&format!("{OBJECTS_DIR}/"))
+                .and_then(|hash| wanted.get(hash))
+            else {
+                continue;
+            };
+            let first = archive::safe_join(&target_dir, &files[0].path)?;
+            {
+                let file = File::create(&first)
+                    .with_context(|| format!("failed to create {}", first.display()))?;
+                let mut out = io::BufWriter::with_capacity(IO_BUFFER, file);
+                io::copy(&mut entry, &mut out)
+                    .with_context(|| format!("failed to write {}", first.display()))?;
+                out.into_inner()
+                    .map_err(|e| e.into_error())
+                    .with_context(|| format!("failed to write {}", first.display()))?;
+            }
+            set_unix_mode(&first, files[0].mode)?;
+            ext.add_file(&first, &format!("{prefix}{}", files[0].path), files[0].mode);
+            for dup in &files[1..] {
+                let dest = archive::safe_join(&target_dir, &dup.path)?;
+                fs::copy(&first, &dest)
+                    .with_context(|| format!("failed to restore {}", dup.path))?;
+                set_unix_mode(&dest, dup.mode)?;
+                ext.add_file(&dest, &format!("{prefix}{}", dup.path), dup.mode);
+            }
+            remaining -= 1;
+            if remaining == 0 {
+                break;
+            }
+        }
+        if remaining > 0 {
+            bail!(
+                "corrupt dedup archive: {remaining} content object(s) listed in the manifest are missing"
+            );
+        }
+    }
+
+    if let Some(selectors) = &selectors {
+        selectors.ensure_all_matched()?;
+        report!(
+            "✔ Extracted {} file{} -> {}",
+            ext.files,
+            if ext.files == 1 { "" } else { "s" },
+            target_dir.display()
+        );
+    } else {
+        report!("✔ Decompressed -> {}", target_dir.display());
+    }
+    Ok(())
 }
 
 // ----------------------------------------------------------------- --only
@@ -453,8 +617,9 @@ fn extract_selected_dedup<R: Read>(
     Ok(())
 }
 
-fn read_manifest(tar_file: &mut File) -> Result<Manifest> {
-    let mut tar = tar::Archive::new(tar_file);
+/// Scans a dedup tar stream for its manifest (object data is skipped).
+fn read_manifest<R: Read>(reader: R) -> Result<Manifest> {
+    let mut tar = tar::Archive::new(reader);
     for entry in tar.entries()? {
         let mut entry = entry?;
         if archive::normalize(&to_posix_path(&entry.path()?)) == MANIFEST_ENTRY {

@@ -22,6 +22,8 @@ jobs:
         run: cargo install cargo-audit --locked --version 0.23.0
       - name: Audit dependencies
         run: cargo audit --deny unsound --deny yanked
+      - name: Audit the browser viewer's dependencies
+        run: cargo audit --file web/Cargo.lock --deny unsound --deny yanked
 
   test:
     name: test (${{ matrix.os }})
@@ -52,6 +54,28 @@ jobs:
 
       - name: Test
         run: cargo test --verbose
+
+  # The browser viewer (web/), opening archives made by the real CLI.
+  viewer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Build the viewer
+        run: |
+          cd web
+          cargo build --target wasm32-unknown-unknown --release --locked
+          cp target/wasm32-unknown-unknown/release/vaqum_viewer.wasm site/vaqum-viewer.wasm
+      - name: Test it
+        run: |
+          cargo build --locked
+          VAQUM_BIN=target/debug/vaqum node --test web/test/
 
   npm-test:
     name: npm-test (${{ matrix.os }})

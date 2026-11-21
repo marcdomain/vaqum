@@ -50,19 +50,50 @@ pub fn open_vaqum(path: &Path) -> Result<VaqumSource> {
     })
 }
 
+/// The keys a user can supply to open an encrypted archive.
+#[derive(Default, Clone, Copy)]
+pub struct KeyOptions<'a> {
+    /// `--key-file` (password-style archives).
+    pub key_file: Option<&'a Path>,
+    /// `--identity` (archives encrypted for recipients); defaults to the
+    /// identity `vaqum keygen` saved.
+    pub identity: Option<&'a Path>,
+}
+
+/// The payload key for `header`, prompting for a password if needed. For
+/// recipient archives this also checks the header MAC.
+pub fn payload_key(header: &Header, keys: KeyOptions) -> Result<Option<crypto::Key>> {
+    if !header.recipients.is_empty() {
+        let identity = crate::keys::Identity::load_or_default(keys.identity)?;
+        let file_key = crate::keys::unwrap(&header.recipients, &identity)?;
+        crate::keys::verify_header_mac(&file_key, &header.bytes_without_mac()?, &header.mac)?;
+        return Ok(Some(crate::keys::payload_key(&file_key)));
+    }
+    if header.encrypted {
+        return crypto::key_for_archive(keys.key_file, &header.salt, header.strong_kdf).map(Some);
+    }
+    Ok(None)
+}
+
 /// Decrypt (if needed) and decompress the payload, yielding the original
 /// bytes: the file itself, or the tar stream for directory archives and
 /// bundles.
 pub fn decoded_payload<R: Read>(
     reader: R,
     header: &Header,
-    key_file: Option<&Path>,
+    keys: KeyOptions,
 ) -> Result<SizeLimitReader<codec::Decoder<crypto::DecryptReader<R>>>> {
-    let key = header
-        .encrypted
-        .then(|| crypto::key_for_archive(key_file, &header.salt, header.strong_kdf))
-        .transpose()?;
-    let key_ref = key.as_ref().map(|k| (k, &header.nonce_prefix));
+    let key = payload_key(header, keys)?;
+    decoded_payload_with_key(reader, header, key.as_ref())
+}
+
+/// [`decoded_payload`] with a key already resolved by [`payload_key`].
+pub fn decoded_payload_with_key<R: Read>(
+    reader: R,
+    header: &Header,
+    key: Option<&crypto::Key>,
+) -> Result<SizeLimitReader<codec::Decoder<crypto::DecryptReader<R>>>> {
+    let key_ref = key.map(|k| (k, &header.nonce_prefix));
     let decoder = codec::Decoder::new(
         crypto::DecryptReader::new(reader, key_ref),
         header.algorithm,

@@ -155,6 +155,14 @@ fn extract_zip(path: &Path, dest: &Path, ext: &mut crate::extract::Extracted) ->
 
 fn extract_tar_gz(path: &Path, dest: &Path, ext: &mut crate::extract::Extracted) -> Result<()> {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    crate::extract::unpack_tar(GzDecoder::new(file), dest, "", &mut |_| true, ext)
-        .with_context(|| format!("failed to extract tar.gz archive into {}", dest.display()))
+    let bar = crate::progress::bar(
+        file.metadata().map(|m| m.len()).unwrap_or(0),
+        false,
+        "Extracting",
+    );
+    let reader = GzDecoder::new(crate::progress::ProgressReader::new(file, bar.clone()));
+    let result = crate::extract::unpack_tar(reader, dest, "", &mut |_| true, ext)
+        .with_context(|| format!("failed to extract tar.gz archive into {}", dest.display()));
+    bar.finish_and_clear();
+    result
 }

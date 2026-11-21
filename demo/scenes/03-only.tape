@@ -1,10 +1,10 @@
-# caption: <b>Extract</b> just the files you need with --only
+# caption: <b>Extract</b> just what you need, wildcards included
 
-Type "vaqum decompress project.vqm --only project/src/main.rs -o restored"
+Type "vaqum decompress project.vqm --only '*.rs' -o restored"
 Sleep 300ms
 Enter
 Sleep 1500ms
-Type "cat restored/project/src/main.rs"
+Type "find restored -type f"
 Sleep 300ms
 Enter
 Sleep 3000ms

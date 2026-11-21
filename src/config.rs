@@ -101,6 +101,15 @@ pub fn path() -> Result<PathBuf> {
     }
 }
 
+/// The directory holding vaqum's config file (and your identity).
+pub fn config_dir() -> Result<PathBuf> {
+    let file = path()?;
+    Ok(file
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".")))
+}
+
 pub const STARTER: &str = r#"# vaqum config — see `vaqum config show` for what's currently resolved.
 #
 # [defaults] applies to every compress; [compress] overrides it for

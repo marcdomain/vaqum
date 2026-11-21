@@ -11,6 +11,7 @@ use vaqum::commands;
 
 fn main() {
     let cli = Cli::parse();
+    vaqum::util::install_interrupt_cleanup();
 
     match cli.command {
         Command::Compress(args) => exit_on_result(commands::compress::run(args)),
@@ -25,6 +26,10 @@ fn main() {
         // the plain success/failure one the other commands use.
         Command::Diff(args) => exit_on_match_result(commands::diff::run(args)),
         Command::Search(args) => exit_on_match_result(commands::search::run(args)),
+        Command::Keygen(args) => exit_on_result(commands::keys::keygen(args)),
+        Command::Pubkey(args) => exit_on_result(commands::keys::pubkey(args)),
+        Command::Sign(args) => exit_on_result(commands::keys::sign(args)),
+        Command::Verify(args) => exit_on_result(commands::keys::verify(args)),
         Command::Completions(args) => exit_on_result(commands::completions::run(args)),
         Command::Config(args) => exit_on_result(commands::config::run(args.action)),
     }

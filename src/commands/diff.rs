@@ -18,6 +18,10 @@ use crate::dedup;
 use crate::format::{EntryType, Header};
 use crate::util::{TreeFile, as_text, hash_bytes, hash_tree, human_bytes};
 
+/// Above this size (per side) files are compared by streamed checksum
+/// instead of line by line: a line diff has to hold both files in memory.
+const MAX_LINE_DIFF: u64 = 64 * 1024 * 1024;
+
 pub fn run(args: DiffArgs) -> Result<bool> {
     let a = resolve(&args.a)?;
     let b = resolve(&args.b)?;
@@ -37,6 +41,29 @@ pub fn run(args: DiffArgs) -> Result<bool> {
             print_file_diff(na, ba, nb, bb, identical);
             let body = html_file_diff(na, ba, nb, bb, identical);
             (identical, body, None)
+        }
+        (Resolved::LargeFile { .. }, Resolved::File { .. } | Resolved::LargeFile { .. })
+        | (Resolved::File { .. }, Resolved::LargeFile { .. }) => {
+            let (na, sa, ha) = a.fingerprint();
+            let (nb, sb, hb) = b.fingerprint();
+            let identical = sa == sb && ha == hb;
+            let text = if identical {
+                format!(
+                    "'{na}' and '{nb}' are identical ({}, sha256 {}…)",
+                    human_bytes(sa),
+                    &crate::util::hex_encode(&ha)[..12]
+                )
+            } else {
+                format!(
+                    "Files '{na}' and '{nb}' differ (too large for a line-by-line diff: {} vs {}; sha256 {}… vs {}…)",
+                    human_bytes(sa),
+                    human_bytes(sb),
+                    &crate::util::hex_encode(&ha)[..12],
+                    &crate::util::hex_encode(&hb)[..12],
+                )
+            };
+            println!("{text}");
+            (identical, format!("<p>{}</p>", escape_html(&text)), None)
         }
         (
             Resolved::Dir {
@@ -108,7 +135,11 @@ fn open_in_editor(
     let editor = std::env::var("VAQUM_DIFF_EDITOR").unwrap_or_else(|_| "code".to_string());
 
     match (a, b, tree) {
-        (Resolved::File { name: na, .. }, Resolved::File { name: nb, .. }, None) => {
+        (
+            Resolved::File { name: na, .. } | Resolved::LargeFile { name: na, .. },
+            Resolved::File { name: nb, .. } | Resolved::LargeFile { name: nb, .. },
+            None,
+        ) => {
             if identical {
                 println!("\n(no editor diff opened — files are identical)");
                 return Ok(());
@@ -140,6 +171,13 @@ fn materialize_for_editor(original: &Path, resolved: &Resolved) -> Result<(PathB
         original.is_file() && crate::format::is_vaqum_file(original).unwrap_or(false);
     let path = match resolved {
         Resolved::Dir { root, .. } => root.clone(),
+        Resolved::LargeFile { .. } if from_archive => {
+            bail!(
+                "'{}' is too large to open from an archive in the editor; decompress it first",
+                original.display()
+            )
+        }
+        Resolved::LargeFile { .. } => original.to_path_buf(),
         Resolved::File { bytes, .. } => {
             if from_archive {
                 let mut tmp = tempfile::Builder::new()
@@ -212,6 +250,12 @@ enum Resolved {
         name: String,
         bytes: Vec<u8>,
     },
+    /// Too big to load: only its size and checksum (streamed) are kept.
+    LargeFile {
+        name: String,
+        size: u64,
+        hash: [u8; 32],
+    },
     Dir {
         name: String,
         root: PathBuf,
@@ -224,8 +268,19 @@ enum Resolved {
 impl Resolved {
     fn kind_name(&self) -> &'static str {
         match self {
-            Resolved::File { .. } => "file",
+            Resolved::File { .. } | Resolved::LargeFile { .. } => "file",
             Resolved::Dir { .. } => "directory",
+        }
+    }
+}
+
+impl Resolved {
+    /// Name, size and SHA-256 of a file side.
+    fn fingerprint(&self) -> (&str, u64, [u8; 32]) {
+        match self {
+            Resolved::File { name, bytes } => (name, bytes.len() as u64, hash_bytes(bytes)),
+            Resolved::LargeFile { name, size, hash } => (name, *size, *hash),
+            Resolved::Dir { name, .. } => (name, 0, [0; 32]),
         }
     }
 }
@@ -243,6 +298,20 @@ fn resolve(path: &Path) -> Result<Resolved> {
             name,
             root: path.to_path_buf(),
             _temp: None,
+        });
+    }
+    let size = fs::metadata(path)
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .len();
+    if size > MAX_LINE_DIFF {
+        let bar = crate::progress::bar(size, false, "Hashing");
+        let result = crate::util::hash_file_with_progress(path, &bar);
+        bar.finish_and_clear();
+        let (size, hash) = result.with_context(|| format!("failed to read {}", path.display()))?;
+        return Ok(Resolved::LargeFile {
+            name: display_name(path),
+            size,
+            hash,
         });
     }
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -268,6 +337,22 @@ fn resolve_vaqum(path: &Path) -> Result<Resolved> {
     );
 
     match header.entry_type {
+        EntryType::File if header.original_size > MAX_LINE_DIFF => {
+            let bar = crate::progress::bar(header.original_size, false, "Hashing");
+            let mut reader = crate::format::HashingReader::new(
+                crate::progress::ProgressReader::new(decoder, bar.clone()),
+                true,
+            );
+            let copied = std::io::copy(&mut reader, &mut std::io::sink());
+            bar.finish_and_clear();
+            copied.with_context(|| format!("failed to decompress {}", path.display()))?;
+            let (size, hash) = reader.stats();
+            Ok(Resolved::LargeFile {
+                name: header.name,
+                size,
+                hash,
+            })
+        }
         EntryType::File => {
             let mut bytes = Vec::new();
             let mut decoder = decoder;
@@ -334,8 +419,16 @@ struct TreeFileSummary {
 }
 
 enum ModifiedContent {
-    Text { text_a: String, text_b: String },
-    Binary { size_a: u64, size_b: u64 },
+    Text {
+        text_a: String,
+        text_b: String,
+    },
+    /// Not line-diffed: binary, or too large (`why` says which).
+    Binary {
+        size_a: u64,
+        size_b: u64,
+        why: &'static str,
+    },
 }
 
 struct ModifiedFile {
@@ -357,8 +450,10 @@ impl TreeDiff {
 }
 
 fn compute_tree_diff(root_a: &Path, root_b: &Path, threads: usize) -> Result<TreeDiff> {
-    let (_, files_a) = hash_tree(root_a, threads, None, None)?;
-    let (_, files_b) = hash_tree(root_b, threads, None, None)?;
+    let bar = crate::progress::bar(0, false, "Comparing");
+    let (_, files_a) = hash_tree(root_a, threads, None, Some(&bar))?;
+    let (_, files_b) = hash_tree(root_b, threads, None, Some(&bar))?;
+    bar.finish_and_clear();
 
     let map_a: std::collections::BTreeMap<&str, &TreeFile> =
         files_a.iter().map(|f| (f.rel_path.as_str(), f)).collect();
@@ -404,6 +499,13 @@ fn compute_tree_diff(root_a: &Path, root_b: &Path, threads: usize) -> Result<Tre
 }
 
 fn read_modified_content(fa: &TreeFile, fb: &TreeFile) -> Result<ModifiedContent> {
+    if fa.size > MAX_LINE_DIFF || fb.size > MAX_LINE_DIFF {
+        return Ok(ModifiedContent::Binary {
+            size_a: fa.size,
+            size_b: fb.size,
+            why: "too large for a line diff",
+        });
+    }
     let bytes_a = fs::read(&fa.abs_path)
         .with_context(|| format!("failed to read {}", fa.abs_path.display()))?;
     let bytes_b = fs::read(&fb.abs_path)
@@ -416,6 +518,7 @@ fn read_modified_content(fa: &TreeFile, fb: &TreeFile) -> Result<ModifiedContent
         _ => Ok(ModifiedContent::Binary {
             size_a: fa.size,
             size_b: fb.size,
+            why: "binary",
         }),
     }
 }
@@ -466,8 +569,12 @@ fn print_tree_diff(name_a: &str, name_b: &str, diff: &TreeDiff, verbose: bool) {
     }
     for f in &diff.modified {
         match &f.content {
-            ModifiedContent::Binary { size_a, size_b } => println!(
-                "  ~ {}  (binary, {} -> {})",
+            ModifiedContent::Binary {
+                size_a,
+                size_b,
+                why,
+            } => println!(
+                "  ~ {}  ({why}, {} -> {})",
                 f.rel_path,
                 human_bytes(*size_a),
                 human_bytes(*size_b)
@@ -681,9 +788,13 @@ fn html_tree_diff(name_a: &str, name_b: &str, diff: &TreeDiff) -> String {
                     out.push_str(&html_hunks(text_a, text_b));
                     out.push_str("</details>");
                 }
-                ModifiedContent::Binary { size_a, size_b } => {
+                ModifiedContent::Binary {
+                    size_a,
+                    size_b,
+                    why,
+                } => {
                     out.push_str(&format!(
-                        "<div class=\"filelist-item\">~ {} <span class=\"muted\">(binary, {} \u{2192} {})</span></div>",
+                        "<div class=\"filelist-item\">~ {} <span class=\"muted\">({why}, {} \u{2192} {})</span></div>",
                         escape_html(&f.rel_path),
                         human_bytes(*size_a),
                         human_bytes(*size_b)

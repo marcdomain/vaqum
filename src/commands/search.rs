@@ -8,13 +8,13 @@
 //! `after_help` for the exact output format.
 
 use std::fs;
+use std::io::{self, BufRead, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use regex::{Regex, RegexBuilder};
 
 use crate::cli::SearchArgs;
-use crate::util::as_text;
 
 pub fn run(args: SearchArgs) -> Result<bool> {
     let root = args.path.clone().unwrap_or_else(|| PathBuf::from("."));
@@ -54,10 +54,12 @@ pub fn run(args: SearchArgs) -> Result<bool> {
     if !matches!(mode, Mode::NamesOnly) {
         let candidates: Vec<&PathBuf> = all_paths.iter().filter(|p| p.is_file()).collect();
         let pool = crate::util::build_thread_pool(Some(threads))?;
+        let bar = crate::progress::counter(false, "Searching");
         content_hits = pool.install(|| {
             use rayon::prelude::*;
             candidates
                 .par_iter()
+                .inspect(|_| bar.inc(1))
                 .filter_map(|path| match search_file_content(path, &matcher) {
                     Ok(lines) if !lines.is_empty() => Some(((*path).clone(), lines)),
                     Ok(_) => None,
@@ -68,6 +70,7 @@ pub fn run(args: SearchArgs) -> Result<bool> {
                 })
                 .collect()
         });
+        bar.finish_and_clear();
         content_hits.sort_by(|a, b| a.0.cmp(&b.0));
     }
 
@@ -115,17 +118,45 @@ fn collect_paths(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// Lines longer than this mark a file as not-really-text (e.g. a huge
+/// minified blob), so searching it can't exhaust memory.
+const MAX_LINE: u64 = 16 * 1024 * 1024;
+
+/// Streams `path` line by line, in constant memory however large it is.
+/// Same rules as before for what counts as text: no NUL byte in the first
+/// 8000 bytes, valid UTF-8 throughout. Non-text files yield no matches.
 fn search_file_content(path: &Path, matcher: &Matcher) -> Result<Vec<(usize, String)>> {
-    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let Some(text) = as_text(&bytes) else {
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut reader = io::BufReader::with_capacity(256 * 1024, file);
+    if reader.fill_buf()?.iter().take(8000).any(|&b| b == 0) {
         return Ok(Vec::new());
-    };
-    Ok(text
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| matcher.is_match(line))
-        .map(|(i, line)| (i + 1, line.to_string()))
-        .collect())
+    }
+    let mut hits = Vec::new();
+    let mut line = Vec::new();
+    let mut number = 0usize;
+    loop {
+        line.clear();
+        let read = (&mut reader)
+            .take(MAX_LINE + 1)
+            .read_until(b'\n', &mut line)?;
+        if read == 0 {
+            break;
+        }
+        if read as u64 > MAX_LINE {
+            return Ok(Vec::new());
+        }
+        number += 1;
+        let Ok(text) = std::str::from_utf8(&line) else {
+            return Ok(Vec::new());
+        };
+        let text = text.strip_suffix('\n').unwrap_or(text);
+        let text = text.strip_suffix('\r').unwrap_or(text);
+        if matcher.is_match(text) {
+            hits.push((number, text.to_string()));
+        }
+    }
+    Ok(hits)
 }
 
 enum Mode {

@@ -1,0 +1,3 @@
+target/
+# Built by CI (see .github/workflows/pages.yml); build locally per README.md.
+site/vaqum-viewer.wasm

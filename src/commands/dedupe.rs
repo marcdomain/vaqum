@@ -113,10 +113,20 @@ fn link_duplicates(
             .split_first()
             .expect("duplicate groups always have at least 2 entries");
         for dup in rest {
+            if same_file(&first.abs_path, &dup.abs_path) {
+                continue; // already one file under two names
+            }
             match relink(&first.abs_path, &dup.abs_path) {
-                Ok(()) => {
+                Ok(true) => {
                     linked += 1;
                     linked_bytes += dup.size;
+                }
+                Ok(false) => {
+                    skipped += 1;
+                    eprintln!(
+                        "warning: skipped {}: it changed since the scan, so it's no longer a duplicate",
+                        dup.rel_path
+                    );
                 }
                 Err(err) => {
                     skipped += 1;
@@ -139,8 +149,14 @@ fn link_duplicates(
 }
 
 /// Replace `dup` with a hardlink to `original`, via a temp name + rename so
-/// a failure partway through never leaves `dup` missing.
-fn relink(original: &Path, dup: &Path) -> Result<()> {
+/// a failure partway through never leaves `dup` missing. The two files are
+/// compared byte for byte first: if either changed since the scan, nothing
+/// is replaced and this returns `Ok(false)`, so an edit made in between is
+/// never lost.
+fn relink(original: &Path, dup: &Path) -> Result<bool> {
+    if !identical(original, dup)? {
+        return Ok(false);
+    }
     let mut tmp_name = dup.as_os_str().to_os_string();
     tmp_name.push(".vaqum-link-tmp");
     let tmp = PathBuf::from(tmp_name);
@@ -150,5 +166,46 @@ fn relink(original: &Path, dup: &Path) -> Result<()> {
         let _ = fs::remove_file(&tmp);
         return Err(err).context("failed to swap in the hardlink");
     }
-    Ok(())
+    Ok(true)
+}
+
+/// Streams both files and compares them byte for byte.
+fn identical(a: &Path, b: &Path) -> Result<bool> {
+    use std::io::Read;
+    let (fa, fb) = (fs::File::open(a)?, fs::File::open(b)?);
+    if fa.metadata()?.len() != fb.metadata()?.len() {
+        return Ok(false);
+    }
+    let mut ra = std::io::BufReader::with_capacity(256 * 1024, fa);
+    let mut rb = std::io::BufReader::with_capacity(256 * 1024, fb);
+    let (mut ba, mut bb) = (vec![0u8; 256 * 1024], vec![0u8; 256 * 1024]);
+    loop {
+        let n = ra.read(&mut ba)?;
+        if n == 0 {
+            return Ok(rb.read(&mut bb[..1])? == 0);
+        }
+        rb.read_exact(&mut bb[..n])?;
+        if ba[..n] != bb[..n] {
+            return Ok(false);
+        }
+    }
+}
+
+/// Whether two paths are already the same file (hardlinked together).
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (fs::metadata(a), fs::metadata(b)) {
+            (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match (a.canonicalize(), b.canonicalize()) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => false,
+        }
+    }
 }
