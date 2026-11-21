@@ -28,6 +28,8 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # A hang (e.g. waiting for input that never comes) fails fast.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -80,6 +82,7 @@ jobs:
   npm-test:
     name: npm-test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

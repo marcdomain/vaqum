@@ -275,7 +275,22 @@ impl<R: Read> Read for DecryptReader<R> {
     }
 }
 
+/// Fails fast when nobody can type a password: in scripts, CI or scheduled
+/// tasks there's no terminal, and on Windows a console prompt would wait
+/// forever. A terminal on stdin or stderr counts (so piping data in still
+/// prompts interactively).
+fn ensure_interactive(what: &str) -> Result<()> {
+    use std::io::IsTerminal;
+    if !io::stdin().is_terminal() && !io::stderr().is_terminal() {
+        bail!(
+            "{what} needs a password, but there's no terminal to type it in; pass --key-file <file> instead"
+        );
+    }
+    Ok(())
+}
+
 pub fn prompt_new_password() -> Result<String> {
+    ensure_interactive("encrypting")?;
     let password =
         rpassword::prompt_password("Enter password: ").context("failed to read password")?;
     let confirm =
@@ -288,6 +303,7 @@ pub fn prompt_new_password() -> Result<String> {
 }
 
 pub fn prompt_existing_password() -> Result<String> {
+    ensure_interactive("this archive is encrypted and")?;
     rpassword::prompt_password("Enter password: ").context("failed to read password")
 }
 

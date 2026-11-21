@@ -4202,3 +4202,46 @@ fn every_corrupted_byte_in_a_plain_archive_is_detected_or_harmless() {
         }
     }
 }
+
+#[test]
+fn encrypted_archive_without_a_terminal_fails_fast_instead_of_waiting() {
+    // No terminal (as in scripts and CI): asking for a password must fail at
+    // once with guidance. On Windows a console prompt used to wait forever.
+    let dir = TempDir::new().unwrap();
+    let key = dir.path().join("k");
+    fs::write(&key, "k").unwrap();
+    let input = dir.path().join("s.txt");
+    fs::write(&input, "secret").unwrap();
+    let archive = dir.path().join("s.vqm");
+    vaqum()
+        .args([
+            "compress",
+            input.to_str().unwrap(),
+            "--key-file",
+            key.to_str().unwrap(),
+            "-o",
+            archive.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let started = std::time::Instant::now();
+    vaqum()
+        .args([
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            dir.path().join("out").to_str().unwrap(),
+        ])
+        .timeout(std::time::Duration::from_secs(20))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no terminal to type it in"))
+        .stderr(predicate::str::contains("--key-file"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    vaqum()
+        .args(["compress", input.to_str().unwrap(), "-e"])
+        .timeout(std::time::Duration::from_secs(20))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no terminal to type it in"));
+}
