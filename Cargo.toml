@@ -57,6 +57,11 @@ panic = "abort"
 assert_cmd = "2.2.2"
 predicates = "3.1.4"
 
+# Terminal tests: drive a pseudo-terminal to type passwords like a user
+# (same nix version ctrlc already pulls in).
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.32", features = ["term", "process", "signal"] }
+
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = "0.1.52"
 

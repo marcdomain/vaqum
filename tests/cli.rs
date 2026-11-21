@@ -4180,6 +4180,10 @@ fn every_corrupted_byte_in_a_plain_archive_is_detected_or_harmless() {
         .success();
     let original = fs::read(&archive).unwrap();
     let expected = fs::read(&input).unwrap();
+    // A key is always supplied: when corruption flips the "encrypted" flag,
+    // vaqum tries (and fails) to decrypt instead of asking for a password.
+    let key = dir.path().join("key");
+    fs::write(&key, "any key").unwrap();
     for pos in 0..original.len() {
         let mut bytes = original.clone();
         bytes[pos] ^= 0x5A;
@@ -4191,6 +4195,8 @@ fn every_corrupted_byte_in_a_plain_archive_is_detected_or_harmless() {
                 "-o",
                 "-",
                 "--verify",
+                "--key-file",
+                key.to_str().unwrap(),
             ])
             .output()
             .unwrap();
@@ -4244,4 +4250,120 @@ fn encrypted_archive_without_a_terminal_fails_fast_instead_of_waiting() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("no terminal to type it in"));
+}
+
+/// Runs vaqum attached to a pseudo-terminal (its controlling terminal, as
+/// in a real shell) and types each answer when a "password:" prompt shows.
+/// A watchdog kills it after 30 s so a regression fails instead of hanging.
+#[cfg(unix)]
+fn run_in_terminal(args: &[&str], answers: &[&str]) -> (Option<i32>, String) {
+    use std::io::{Read, Write};
+    use std::os::unix::process::CommandExt;
+
+    let pty = nix::pty::openpty(None, None).expect("openpty");
+    let slave = std::fs::File::from(pty.slave);
+    let mut cmd = std::process::Command::new(assert_cmd::cargo::cargo_bin("vaqum"));
+    cmd.args(args)
+        .env("XDG_CONFIG_HOME", isolated_config_home())
+        .stdin(slave.try_clone().unwrap())
+        .stdout(slave.try_clone().unwrap())
+        .stderr(slave);
+    unsafe {
+        cmd.pre_exec(|| {
+            nix::unistd::setsid().map_err(std::io::Error::from)?;
+            if nix::libc::ioctl(0, nix::libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().expect("spawn vaqum");
+    drop(cmd); // close our copies of the terminal's slave side
+
+    let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+    let watchdog = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+    });
+
+    let mut master = std::fs::File::from(pty.master);
+    let mut seen = Vec::new();
+    let mut answered = 0;
+    let mut buf = [0u8; 4096];
+    loop {
+        match master.read(&mut buf) {
+            Ok(0) | Err(_) => break, // the child closed the terminal
+            Ok(n) => seen.extend_from_slice(&buf[..n]),
+        }
+        let last_line = seen.rsplit(|&b| b == b'\n').next().unwrap_or_default();
+        if answered < answers.len()
+            && String::from_utf8_lossy(last_line)
+                .to_lowercase()
+                .contains("password:")
+        {
+            master
+                .write_all(format!("{}\n", answers[answered]).as_bytes())
+                .unwrap();
+            answered += 1;
+        }
+    }
+    let status = child.wait().unwrap();
+    drop(watchdog);
+    (status.code(), String::from_utf8_lossy(&seen).into_owned())
+}
+
+#[cfg(unix)]
+#[test]
+fn typed_password_at_a_terminal_encrypts_and_decrypts() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("secret.txt");
+    fs::write(&input, "typed at a terminal\n").unwrap();
+    let archive = dir.path().join("secret.vqm");
+    let out = dir.path().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let password = "Correct-Horse-Battery-9";
+
+    let (code, transcript) = run_in_terminal(
+        &[
+            "compress",
+            input.to_str().unwrap(),
+            "-e",
+            "-o",
+            archive.to_str().unwrap(),
+            "--no-secret-check",
+        ],
+        &[password, password],
+    );
+    assert_eq!(code, Some(0), "encrypt failed:\n{transcript}");
+    assert!(transcript.contains("Confirm password"), "{transcript}");
+
+    let (code, transcript) = run_in_terminal(
+        &[
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ],
+        &["wrong password"],
+    );
+    assert_ne!(
+        code,
+        Some(0),
+        "a wrong typed password was accepted:\n{transcript}"
+    );
+
+    let (code, transcript) = run_in_terminal(
+        &[
+            "decompress",
+            archive.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ],
+        &[password],
+    );
+    assert_eq!(code, Some(0), "decrypt failed:\n{transcript}");
+    assert_eq!(
+        fs::read_to_string(out.join("secret.txt")).unwrap(),
+        "typed at a terminal\n"
+    );
 }

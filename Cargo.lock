@@ -1688,6 +1688,7 @@ dependencies = [
  "indicatif",
  "mimalloc",
  "minisign",
+ "nix",
  "predicates",
  "rand",
  "rayon",
