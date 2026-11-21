@@ -86,6 +86,24 @@ printf '// TODO: add tests\npub fn helper() {}\n' > app/util.rs
 "$BIN_DIR/vaqum" keygen -o bob.key >/dev/null
 echo "export BOB=\"$("$BIN_DIR/vaqum" pubkey -i bob.key)\"" >> "$ZDOTDIR_DEMO/.zshrc"
 
+# huge file: shows the progress bar (3 GiB of logs; deleted after recording)
+# A varied 64 MiB block, repeated: the repeats sit beyond zstd's match
+# window, so the ratio is realistic rather than one line x 40 million.
+awk 'BEGIN { srand(7); for (i = 0; i < 720000; i++) printf "2026-11-21T%02d:%02d:%02dZ %s request id=%d path=/api/%s status=%d latency_ms=%d\n", int(i/36000)%24, int(i/600)%60, i%60, (rand() < 0.9 ? "INFO" : "WARN"), int(rand()*1e9), (rand() < 0.5 ? "items" : "orders/" int(rand()*99999)), (rand() < 0.97 ? 200 : 500), int(rand()*400) }' > .block
+for i in $(seq 1 48); do cat .block; done > server-logs.txt
+rm .block
+
+# browser viewer: a password-protected archive (with one disguised file, so
+# the risk warning shows)
+mkdir -p q3-report/charts
+for i in $(seq 1 300); do echo "row $i,revenue,$((i * 37 % 1000))"; done > q3-report/summary.csv
+echo "# Q3 report" > q3-report/README.md
+head -c 40000 /dev/urandom > q3-report/charts/revenue.png
+printf 'MZ\220\000 not really a pdf' > q3-report/invoice.pdf
+printf 'tulip-harbor-42' > .viewer-password
+"$BIN_DIR/vaqum" compress q3-report -r --key-file .viewer-password -o q3-report.vqm -q --no-secret-check >/dev/null
+rm -rf q3-report .viewer-password
+
 # zip / tar.gz
 mkdir -p archive-src/photos
 printf 'shared with a teammate\n' > archive-src/notes.txt

@@ -4,13 +4,16 @@
 #
 #   ./demo/render.sh
 #
-# Needs: vhs, ffmpeg, and Google Chrome or Chromium (to draw the captions;
-# override with CHROME=/path/to/chrome).
+# Needs: vhs, ffmpeg, Node.js, and Google Chrome or Chromium (captions and
+# the browser scene; override with CHROME=/path/to/chrome). The browser scene
+# also needs the viewer built: see web/README.md.
 #
-# To change the demo, edit a scene file: the commands are ordinary VHS
-# tape commands, and the `# caption:` line is the text shown under it
-# (HTML allowed, <b> for the highlighted word). Scenes run in file-name
-# order and share one sandbox, so later scenes can use earlier output.
+# To change the demo, edit a scene file: `.tape` scenes are ordinary VHS
+# tape commands; `.web` scenes record the browser viewer opening the
+# `# archive:` with the `# password:`. The `# caption:` line is the text
+# shown under each (HTML allowed, <b> for the highlighted word). Scenes run
+# in file-name order and share one sandbox, so later scenes can use earlier
+# output.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,7 +26,7 @@ CAPTION_H=76
 BG="#EEF0FB"     # must match `Set MarginFill`
 FPS=24
 
-for tool in vhs ffmpeg; do
+for tool in vhs ffmpeg node; do
   command -v "$tool" >/dev/null || { echo "render.sh: $tool is required" >&2; exit 1; }
 done
 if [ -z "${CHROME:-}" ]; then
@@ -59,13 +62,33 @@ EOF
   [ -s "$3" ] || { echo "render.sh: failed to render caption $1" >&2; exit 1; }
 }
 
+if [ ! -f web/site/vaqum-viewer.wasm ]; then
+  echo "render.sh: web/site/vaqum-viewer.wasm is missing; build the viewer first (web/README.md)" >&2
+  exit 1
+fi
+
 parts=()
 n=0
-for tape in demo/scenes/*.tape; do
+for tape in demo/scenes/*.tape demo/scenes/*.web; do
+  [ -e "$tape" ] || continue
   n=$((n + 1))
-  name="$(basename "$tape" .tape)"
+  name="$(basename "${tape%.*}")"
   caption="$(sed -n 's/^# caption: *//p' "$tape" | head -n 1)"
   echo "==> scene $n: $name"
+
+  if [ "${tape##*.}" = web ]; then
+    archive="$(sed -n 's/^# archive: *//p' "$tape" | head -n 1)"
+    password="$(sed -n 's/^# password: *//p' "$tape" | head -n 1)"
+    node demo/web-scene.mjs "$CHROME" web/site "/tmp/vaqum-demo/$archive" "$password" "$WORK/$name" >/dev/null
+    ffmpeg -v error -y -f concat -safe 0 -i "$WORK/$name/frames.txt" \
+      -vf "fps=$FPS,format=yuv420p" -c:v libx264 -crf 12 -preset veryfast "$WORK/$name.mp4"
+    caption_png "$n" "$caption" "$WORK/$name.png"
+    ffmpeg -v error -y -i "$WORK/$name.mp4" -loop 1 -i "$WORK/$name.png" \
+      -filter_complex "[1:v]format=yuv420p[c];[0:v]fps=$FPS,format=yuv420p[v];[v][c]vstack=shortest=1" \
+      -c:v libx264 -crf 12 -preset veryfast -pix_fmt yuv420p "$WORK/$name-captioned.mp4"
+    parts+=("$WORK/$name-captioned.mp4")
+    continue
+  fi
 
   # Full tape = shared settings + output path + the scene's own commands
   # (VHS only honours `Set` lines at the very top of a tape).
@@ -93,5 +116,8 @@ echo "==> encoding demo.gif"
 ffmpeg -v error -y -i "$WORK/all.mp4" \
   -vf "fps=$FPS,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" \
   "$OUT"
+
+# The big sample file is only needed while recording.
+rm -f /tmp/vaqum-demo/server-logs.txt /tmp/vaqum-demo/server-logs.txt.vqm
 
 echo "==> wrote $OUT ($(du -h "$OUT" | cut -f1))"

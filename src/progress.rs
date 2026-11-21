@@ -3,7 +3,7 @@
 //! flash a bar), and never when stderr isn't a terminal or with
 //! `-q`/`--quiet`, so scripts and logs stay clean.
 //!
-//!   Compressing ██████████▌       58% · 1.4 GiB/s · 3s
+//!   Compressing ━━━━━━━╸──── 58% 1.4 GiB/s 3s
 
 use std::io::{self, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::time::Duration;
@@ -11,12 +11,13 @@ use std::time::Duration;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
 /// Known total: bar, percent, speed, time left.
-const BAR: &str = "{msg} {bar:18.cyan} {percent:>3}% · {binary_bytes_per_sec} · {eta}";
+const BAR: &str = "{msg} {bar:12.cyan/238} {percent:>3}% {binary_bytes_per_sec} {eta}";
 /// Unknown total (stdin, tree scans): amount done and speed.
-const STREAM: &str = "{spinner:.cyan} {msg} {binary_bytes} · {binary_bytes_per_sec}";
+const STREAM: &str = "{spinner:.cyan} {msg} {binary_bytes} {binary_bytes_per_sec}";
 /// Counting items (files searched).
 const COUNT: &str = "{spinner:.cyan} {msg} {human_pos} files";
-const SMOOTH: &str = "█▉▊▋▌▍▎▏ ";
+/// A thin line: filled, leading edge, remaining.
+const LINE: &str = "━╸─";
 /// Work shorter than this never shows a bar.
 const SHOW_AFTER: Duration = Duration::from_millis(300);
 
@@ -26,7 +27,7 @@ fn make(len: Option<u64>, quiet: bool, message: &'static str, template: &str) ->
     }
     let bar = ProgressBar::with_draw_target(len, ProgressDrawTarget::hidden());
     if let Ok(style) = ProgressStyle::with_template(template) {
-        bar.set_style(style.progress_chars(SMOOTH));
+        bar.set_style(style.progress_chars(LINE));
     }
     bar.set_message(message);
     // Reveal it only if the work is still going after SHOW_AFTER. A weak
