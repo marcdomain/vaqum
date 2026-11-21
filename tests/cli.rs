@@ -4312,7 +4312,86 @@ fn run_in_terminal(args: &[&str], answers: &[&str]) -> (Option<i32>, String) {
     (status.code(), String::from_utf8_lossy(&seen).into_owned())
 }
 
-#[cfg(unix)]
+/// Windows version of [`run_in_terminal`], through a ConPTY pseudo-console
+/// (what Windows Terminal uses). Enter is `\r`; the output stream doesn't
+/// end when the child exits, so a reader thread feeds a channel and the
+/// loop watches the process instead. A 60 s deadline kills a stuck child.
+#[cfg(windows)]
+fn run_in_terminal(args: &[&str], answers: &[&str]) -> (Option<i32>, String) {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 40,
+            cols: 200,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open a pseudo-console");
+    let mut cmd = CommandBuilder::new(assert_cmd::cargo::cargo_bin("vaqum"));
+    cmd.args(args);
+    cmd.env("APPDATA", isolated_config_home());
+    cmd.cwd(std::env::current_dir().unwrap());
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("spawn vaqum in a pseudo-console");
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let mut writer = pair.master.take_writer().unwrap();
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut seen = Vec::new();
+    let (mut answered, mut cursor_replies) = (0, 0);
+    let status = loop {
+        while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
+            seen.extend(chunk);
+        }
+        let text = String::from_utf8_lossy(&seen).to_lowercase();
+        // ConPTY may ask where the cursor is and wait for an answer.
+        let asks = text.matches("\x1b[6n").count();
+        while cursor_replies < asks {
+            writer.write_all(b"\x1b[1;1R").unwrap();
+            cursor_replies += 1;
+        }
+        let prompts = text.matches("password:").count();
+        while answered < answers.len() && answered < prompts {
+            writer
+                .write_all(format!("{}\r", answers[answered]).as_bytes())
+                .unwrap();
+            writer.flush().unwrap();
+            answered += 1;
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status.exit_code() as i32);
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            break None;
+        }
+    };
+    drop(writer);
+    drop(pair.master);
+    while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(300)) {
+        seen.extend(chunk);
+    }
+    (status, String::from_utf8_lossy(&seen).into_owned())
+}
+
 #[test]
 fn typed_password_at_a_terminal_encrypts_and_decrypts() {
     let dir = TempDir::new().unwrap();
